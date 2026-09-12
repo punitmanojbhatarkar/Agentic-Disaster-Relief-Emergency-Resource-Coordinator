@@ -248,15 +248,7 @@ export default function HomePage() {
             <span className="status-dot" style={{ background: "var(--accent)" }} />
             <span style={{ fontSize: 10, color: "var(--text-2)", fontWeight: 500 }}>System Active</span>
           </div>
-          <div className="hide-on-mobile" style={{
-            background: "transparent", border: "1px solid var(--border)",
-            borderRadius: 4, padding: "4px 9px",
-            fontSize: 10, color: "var(--text-3)",
-            display: "flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace"
-          }}>
-            <Globe2 size={10} color="var(--text-3)" />
-            SIH 2026 · PS20
-          </div>
+
           <div style={{ width: 1, height: 20, background: "var(--border)", margin: '0 8px' }} />
           <button
             className="btn-icon"
