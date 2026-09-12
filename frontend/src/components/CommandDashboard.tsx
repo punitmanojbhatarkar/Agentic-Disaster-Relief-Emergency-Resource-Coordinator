@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle, BarChart3, Map, ClipboardList, Mic, Crosshair } from 'lucide-react';
+import { AlertTriangle, CheckCircle, BarChart3, Map, ClipboardList, Mic, Crosshair, MapPin } from 'lucide-react';
 import AgentStatusBar from './AgentStatusBar';
 import AnalyticsPanel from './AnalyticsPanel';
 
@@ -28,6 +28,8 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
   const [aiVerdicts, setAiVerdicts] = useState<Record<string, any>>({});
   const [fetchingVerdict, setFetchingVerdict] = useState<Record<string, boolean>>({});
   const [reportForm, setReportForm] = useState({
+    reporter_name: '',
+    reporter_contact: '',
     location: '',
     severity_reported: 5,
     population: 1000,
@@ -638,8 +640,30 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
             <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 24, lineHeight: 1.4 }}>Click anywhere on the map to auto-fill coordinates. AI will intelligently estimate missing data.</p>
             
             <form onSubmit={handleSubmitReport} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)', marginBottom: 6, display: 'block' }}>Your Name <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>(Optional)</span></label>
+                  <input type="text" value={reportForm.reporter_name} onChange={e => setReportForm({...reportForm, reporter_name: e.target.value})} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: 'var(--bg-panel)', border: '1px solid var(--border)', color: 'var(--text-1)', fontSize: 13, outline: 'none', transition: 'border 0.2s ease' }} onFocus={(e) => e.target.style.borderColor = 'var(--accent)'} onBlur={(e) => e.target.style.borderColor = 'var(--border)'} placeholder="e.g. Rahul Sharma" />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)', marginBottom: 6, display: 'block' }}>Contact Number <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>(Optional)</span></label>
+                  <input type="tel" value={reportForm.reporter_contact} onChange={e => setReportForm({...reportForm, reporter_contact: e.target.value})} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: 'var(--bg-panel)', border: '1px solid var(--border)', color: 'var(--text-1)', fontSize: 13, outline: 'none', transition: 'border 0.2s ease' }} onFocus={(e) => e.target.style.borderColor = 'var(--accent)'} onBlur={(e) => e.target.style.borderColor = 'var(--border)'} placeholder="e.g. 9876543210" />
+                </div>
+              </div>
+
               <div>
-                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)', marginBottom: 6, display: 'block' }}>Location / Name</label>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)', marginBottom: 6, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Location / Area Name</span>
+                  <button type="button" onClick={() => {
+                    if (navigator.geolocation) {
+                      navigator.geolocation.getCurrentPosition((pos) => {
+                        setReportForm(prev => ({...prev, lat: Number(pos.coords.latitude.toFixed(4)), lon: Number(pos.coords.longitude.toFixed(4)), location: prev.location || "Live Location"}));
+                      }, (err) => alert("Could not get location: " + err.message));
+                    } else alert("Geolocation not supported");
+                  }} style={{ color: 'var(--accent)', cursor: 'pointer', background: 'none', border: 'none', padding: 0, fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <MapPin size={12} /> Use Live Location
+                  </button>
+                </label>
                 <input required type="text" value={reportForm.location} onChange={e => setReportForm({...reportForm, location: e.target.value})} style={{ width: '100%', padding: '10px 12px', borderRadius: 8, background: 'var(--bg-panel)', border: '1px solid var(--border)', color: 'var(--text-1)', fontSize: 13, outline: 'none', transition: 'border 0.2s ease' }} onFocus={(e) => e.target.style.borderColor = 'var(--accent)'} onBlur={(e) => e.target.style.borderColor = 'var(--border)'} placeholder="e.g. South Silchar Floods" />
               </div>
 

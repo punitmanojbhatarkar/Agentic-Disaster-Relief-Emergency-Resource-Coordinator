@@ -4,6 +4,8 @@ from typing import Optional, Dict, Any, List
 class ZoneReport(BaseModel):
     zone_id: str
     location: str
+    reporter_name: Optional[str] = None
+    reporter_contact: Optional[str] = None
     severity_reported: Optional[int] = 5
     population: Optional[int] = 1000  # Default fallback if AI can't infer
     zone_area_km2: Optional[float] = None
