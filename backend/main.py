@@ -727,7 +727,10 @@ def report_zone(report: Dict[str, Any]):
                 # Re-evaluate AI needs due to increased severity if it's pending
                 if zid in state.pending_zones:
                     zr_update = ZoneReport(**existing)
-                    existing["needs"] = assess_needs(zr_update)
+                    needs_result = assess_needs(zr_update)
+                    existing["delivery_mode"]     = needs_result.pop("delivery_mode", None)
+                    existing["delivery_rationale"]= needs_result.pop("delivery_rationale", None)
+                    existing["needs"] = needs_result
                     
                 z_dict[zid] = existing
                 state.save()
@@ -766,7 +769,10 @@ def report_zone(report: Dict[str, Any]):
         
     if "needs" not in report or not report["needs"]:
         zr = ZoneReport(**report, needs={})
-        report["needs"] = assess_needs(zr)
+        needs_result = assess_needs(zr)
+        report["delivery_mode"]      = needs_result.pop("delivery_mode", None)
+        report["delivery_rationale"] = needs_result.pop("delivery_rationale", None)
+        report["needs"] = needs_result
         
     # -- PROTOCOL RAG AGENT --
     sop_check = check_sop_compliance(

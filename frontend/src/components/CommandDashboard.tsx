@@ -216,6 +216,16 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
     return 'var(--sev-1)';
   };
 
+  // Delivery Mode badge style — each mode has distinct color
+  const getDeliveryBadgeStyle = (mode: string): React.CSSProperties => {
+    if (mode?.includes('Road'))       return { background: 'rgba(34,197,94,0.12)',  color: '#22c55e', border: '1px solid rgba(34,197,94,0.35)'  };
+    if (mode?.includes('Helicopter')) return { background: 'rgba(249,115,22,0.12)', color: '#f97316', border: '1px solid rgba(249,115,22,0.35)' };
+    if (mode?.includes('Boat'))       return { background: 'rgba(20,184,166,0.12)', color: '#14b8a6', border: '1px solid rgba(20,184,166,0.35)' };
+    if (mode?.includes('Train'))      return { background: 'rgba(168,85,247,0.12)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.35)' };
+    if (mode?.includes('Air'))        return { background: 'rgba(99,102,241,0.12)', color: '#6366f1', border: '1px solid rgba(99,102,241,0.35)'  };
+    return { background: 'rgba(255,255,255,0.06)', color: 'var(--text-2)', border: '1px solid var(--border)' };
+  };
+
   const handleApprove = async (zoneId: string, needs: any) => {
     try {
       await fetch(`${apiBase}/api/zones/${zoneId}/approve`, {
@@ -350,7 +360,25 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
                 <span style={{ fontSize: 12, fontWeight: 700, color: getSevColor(z.severity_final) }}>{z.severity_final}/10</span>
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>{z.location} • Pop: {z.population?.toLocaleString()}</div>
-              
+
+              {/* Delivery Mode Badge — Active Zone */}
+              {z.delivery_mode && (
+                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '5px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+                    ...getDeliveryBadgeStyle(z.delivery_mode)
+                  }}>
+                    {z.delivery_mode}
+                  </div>
+                  {z.delivery_rationale && (
+                    <div style={{ fontSize: 10, color: 'var(--text-3)', lineHeight: 1.4, fontStyle: 'italic', paddingLeft: 2 }}>
+                      {z.delivery_rationale}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {z.gee_area_km2 && (
                 <div style={{ marginTop: 8, fontSize: 11, background: 'rgba(56,189,248,0.1)', color: 'var(--text-1)', padding: '4px 8px', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <CheckCircle size={12} color="#38bdf8"/> {z.gee_area_km2} km² Satellite Verified
@@ -456,6 +484,24 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
                   {z.gee_area_km2 && (
                     <div style={{ marginTop: 8, fontSize: 11, background: 'rgba(56,189,248,0.1)', color: 'var(--text-1)', padding: '4px 8px', borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                       <CheckCircle size={12} color="#38bdf8"/> {z.gee_area_km2} km² Satellite
+                    </div>
+                  )}
+
+                  {/* Delivery Mode Badge — Pending Zone */}
+                  {z.delivery_mode && (
+                    <div style={{ marginTop: 8, marginBottom: 2, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6,
+                        padding: '5px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700,
+                        ...getDeliveryBadgeStyle(z.delivery_mode)
+                      }}>
+                        {z.delivery_mode}
+                      </div>
+                      {z.delivery_rationale && (
+                        <div style={{ fontSize: 10, color: 'var(--text-3)', lineHeight: 1.4, fontStyle: 'italic', paddingLeft: 2 }}>
+                          {z.delivery_rationale}
+                        </div>
+                      )}
                     </div>
                   )}
                   

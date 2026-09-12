@@ -26,3 +26,6 @@ class ZoneReport(BaseModel):
     nearest_facilities: Optional[List[Dict[str, Any]]] = []
     credibility: Optional[Dict[str, Any]] = None
     sop_compliance: Optional[Dict[str, Any]] = None
+    # Smart Delivery Mode — set by NeedsAgent, used by AllocationAgent for ETA
+    delivery_mode: Optional[str] = None        # e.g. "🚁 Helicopter Airdrop"
+    delivery_rationale: Optional[str] = None   # e.g. "Roads destroyed by landslide, aerial only option"
