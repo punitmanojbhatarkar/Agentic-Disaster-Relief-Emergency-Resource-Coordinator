@@ -403,6 +403,8 @@ export default function HomePage() {
                   { label: "🏔️ Landslide (Marathi)", msg: "भूस्खलन, सातारा, महाराष्ट्र. 200 लोक अडकले आहेत. मदत पाठवा." },
                   { label: "🌀 Cyclone (English)", msg: "Cyclone hit Puri coast. 5000 people stranded. Need NDRF teams urgently." },
                   { label: "🔥 Fire (Bengali)", msg: "আগুন, কলকাতা বন্দর। ১০০০ মানুষ আটকা পড়েছে। সাহায্য পাঠান।" },
+                  { label: "💬 Flood (Hinglish)", msg: "Bhai Patna mein severe flood aagaya hai. 500 log phase hue hai. Jaldi food and NDRF team bhejo." },
+                  { label: "💬 Accident (Engdi)", msg: "Highway pe major accident hai. Bahut injured hain, immediately medical help chahiye." },
                 ].map(preset => (
                   <button key={preset.label} onClick={() => setSmsMessage(preset.msg)}
                     style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'var(--text-2)', cursor: 'pointer' }}>
