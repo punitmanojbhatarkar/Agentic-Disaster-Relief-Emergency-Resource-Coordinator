@@ -356,15 +356,35 @@ export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps
                 zoneCoords.lon, zoneCoords.lat,
                 f.lon, f.lat
               ]),
-              width: 2.5,
+              width: 3,
               material: new Cesium.PolylineDashMaterialProperty({
-                color: fColor.withAlpha(0.8),
-                dashLength: 15.0
+                color: fColor,
+                dashLength: 20.0
               }),
-              clampToGround: false,
+              clampToGround: true,
             }
           });
           facilityEntitiesRef.current.push(pin);
+
+          // Add a distance label at the midpoint
+          if (f.dist_km) {
+            const midLon = (zoneCoords.lon + f.lon) / 2;
+            const midLat = (zoneCoords.lat + f.lat) / 2;
+            const distLabel = viewer.entities.add({
+              position: Cesium.Cartesian3.fromDegrees(midLon, midLat),
+              label: {
+                text: `${f.dist_km.toFixed(1)} km`,
+                font: 'bold 9pt sans-serif',
+                fillColor: Cesium.Color.WHITE,
+                showBackground: true,
+                backgroundColor: Cesium.Color.BLACK.withAlpha(0.7),
+                backgroundPadding: new Cesium.Cartesian2(6, 4),
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                pixelOffset: new Cesium.Cartesian2(0, 0),
+              }
+            });
+            facilityEntitiesRef.current.push(distLabel);
+          }
         } catch (e) {
           // Skip bad facility coords
         }
@@ -479,15 +499,35 @@ export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps
                 zoneCoords.lon, zoneCoords.lat,
                 f.lon, f.lat
               ]),
-              width: 2.5,
+              width: 3,
               material: new Cesium.PolylineDashMaterialProperty({
-                color: fColor.withAlpha(0.8),
-                dashLength: 15.0
+                color: fColor,
+                dashLength: 20.0
               }),
-              clampToGround: false,
+              clampToGround: true,
             }
           });
           pendingFacilityEntitiesRef.current.push(pin);
+
+          // Add a distance label at the midpoint
+          if (f.dist_km) {
+            const midLon = (zoneCoords.lon + f.lon) / 2;
+            const midLat = (zoneCoords.lat + f.lat) / 2;
+            const distLabel = viewer.entities.add({
+              position: Cesium.Cartesian3.fromDegrees(midLon, midLat),
+              label: {
+                text: `${f.dist_km.toFixed(1)} km`,
+                font: 'bold 9pt sans-serif',
+                fillColor: Cesium.Color.WHITE,
+                showBackground: true,
+                backgroundColor: Cesium.Color.BLACK.withAlpha(0.7),
+                backgroundPadding: new Cesium.Cartesian2(6, 4),
+                disableDepthTestDistance: Number.POSITIVE_INFINITY,
+                pixelOffset: new Cesium.Cartesian2(0, 0),
+              }
+            });
+            pendingFacilityEntitiesRef.current.push(distLabel);
+          }
         } catch (e) { }
       });
     });
