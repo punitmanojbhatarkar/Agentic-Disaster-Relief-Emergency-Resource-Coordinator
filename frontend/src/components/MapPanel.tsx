@@ -612,12 +612,12 @@ export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps
       {/* Zoom Controls */}
       <div style={{
         position: "absolute",
-        bottom: 24,
+        top: 80,
         right: isAdmin ? 360 : 24,
         display: "flex",
         flexDirection: "column",
         gap: 8,
-        zIndex: 10
+        zIndex: 100
       }}>
         <button 
           onClick={() => {
