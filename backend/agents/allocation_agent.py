@@ -5,6 +5,21 @@ from backend.store.state import state
 from backend.models.agency import Assignment
 from backend.models.zone import ZoneReport
 
+import math
+from backend.services.communications import notify_agency_assignment
+
+def calculate_haversine(lat1, lon1, lat2, lon2):
+    """
+    Mock Google Maps API distance calculation.
+    Returns distance in km between two lat/lon points.
+    """
+    R = 6371  # Earth radius in km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
 def run_allocation():
     """
     Phase 4: Allocation Agent
@@ -41,7 +56,11 @@ def run_allocation():
             agency_id = _get_default_agency(resource_type)
             
             now = datetime.datetime.utcnow()
-            window_end = now + datetime.timedelta(hours=24)
+            
+            # Example Haversine usage: assume central warehouse is at [26.0, 91.0]
+            # and we parse zone lat/lon if we have them. For demo, we just add 1 hour per 50km
+            estimated_travel_time_hours = 4  # mocked default
+            window_end = now + datetime.timedelta(hours=24 + estimated_travel_time_hours)
             
             assignment = Assignment(
                 id=str(uuid.uuid4()),
@@ -50,7 +69,7 @@ def run_allocation():
                 resource_type=resource_type,
                 quantity=allocated_qty,
                 status="proposed",
-                reasoning=f"Allocated {allocated_qty} {resource_type} to {zone_id} based on severity {zone_dict.get('severity_final')}",
+                reasoning=f"Allocated {allocated_qty} {resource_type} to {zone_id} based on severity {zone_dict.get('severity_final')}. Estimated ETA: {estimated_travel_time_hours} hrs.",
                 time_window_start=now,
                 time_window_end=window_end,
                 created_at=now
@@ -69,6 +88,9 @@ def run_allocation():
                 "time_window_start": now.isoformat(),
                 "time_window_end": window_end.isoformat()
             })
+            
+            # Trigger SMS Mock
+            notify_agency_assignment(assignment)
             
             zone_dict["needs"][resource_type] -= allocated_qty
             if zone_dict["needs"][resource_type] > 0:

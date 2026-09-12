@@ -1,83 +1,88 @@
 "use client";
-import { useState, useCallback } from "react";
+import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { Satellite, Globe2, ChevronRight, ChevronLeft, Layers2, Database, Cpu, Sun, Moon, Waves, Wheat, Building2, Trees, Droplets } from "lucide-react";
-import ChatPanel from "@/components/ChatPanel";
+import { Shield, Sun, Moon, Globe2, LogIn, FileSearch, UserPlus, LogOut } from "lucide-react";
 import CommandDashboard from "@/components/CommandDashboard";
 
 const MapPanel = dynamic(() => import("@/components/MapPanel"), { ssr: false });
 
-interface SatStats {
-  ndvi?: number;
-  cloud?: number;
-  area?: number;
-  sensor?: string;
-  module?: string;
-}
-
-interface SatData {
-  imageUrl?: string | null;
-  geeTileUrl?: string | null;
-  bbox?: number[] | null;
-  centerLat?: number | null;
-  centerLon?: number | null;
-  module?: string;
-}
-
-const NAV_MODULES = [
-  { icon: <Waves size={14} />, label: "DisasterWatch", module: "flood" },
-  { icon: <Wheat size={14} />, label: "AgroVision",    module: "agri"  },
-  { icon: <Building2 size={14} />, label: "UrbanPulse",   module: "urban" },
-  { icon: <Trees size={14} />, label: "ForestGuard",  module: "forest"},
-  { icon: <Droplets size={14} />, label: "WaterWatch",   module: "water" },
-];
-
-const DATA_SOURCES = [
-  { name: "ISRO Bhuvan WMS",         icon: <Database size={14} />, status: "Live" },
-  { name: "Sentinel-1 SAR (ESA)",     icon: <Satellite size={14} />, status: "Live" },
-  { name: "Sentinel-2 Optical (ESA)", icon: <Satellite size={14} />, status: "Live" },
-  { name: "AWS Earth Search STAC",    icon: <Database size={14} />, status: "Live" },
-  { name: "MS Planetary Computer",    icon: <Globe2 size={14} />, status: "Live" },
-  { name: "Google Earth Engine",      icon: <Globe2 size={14} />, status: "Live" },
-];
-
-const AI_MODELS = [
-  { name: "Gemini 3.7 Flash",  tag: "Vision",   badge: "badge-flood" },
-  { name: "EarthDial VLM",     tag: "RS-VQA",   badge: "badge-agri" },
-  { name: "SAM2 (Meta)",       tag: "Segment",  badge: "badge-sar" },
-  { name: "IndicTrans2",       tag: "Translate",badge: "badge-water" },
-  { name: "GEE (NDVI/SAR)",    tag: "Compute",  badge: "badge-forest" },
-];
-
 export default function HomePage() {
-  const [satData, setSatData]   = useState<SatData>({});
-  const [stats, setStats]       = useState<SatStats>({});
-  const [chatOpen, setChatOpen] = useState(true);
-  const [infoOpen, setInfoOpen] = useState(false);
-  const [activeModule, setActiveModule] = useState<string | null>(null);
-  const [geojson, setGeojson] = useState<any>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [mode, setMode] = useState<'satellite' | 'command'>('satellite');
+  const [clickedCoords, setClickedCoords] = useState<{lat: number, lon: number} | null>(null);
+  
+  // Auth & Modals
+  const [user, setUser] = useState<{username: string, role: string} | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  
+  // Login State
+  const [loginId, setLoginId] = useState("");
+  const [password, setPassword] = useState("");
+  const [isNewUser, setIsNewUser] = useState(false);
+  const [loginError, setLoginError] = useState("");
+  const [loginSuccess, setLoginSuccess] = useState("");
 
-  const handleImageUpdate = useCallback((url: string, bbox?: number[], centerLat?: number, centerLon?: number, module?: string, geeTileUrl?: string) => {
-    setSatData({ imageUrl: url, geeTileUrl, bbox, centerLat, centerLon, module });
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
+  // Check auth on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("aegis_user");
+    if (saved) setUser(JSON.parse(saved));
   }, []);
 
-  const handleStatsUpdate = useCallback((s: SatStats) => {
-    setStats(s);
-    if (s.module) setActiveModule(s.module);
-  }, []);
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    setLoginSuccess("");
+    
+    if (isNewUser) {
+      try {
+        const res = await fetch(`${apiBase}/api/users/request`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: loginId, password })
+        });
+        if (res.ok) {
+          setLoginSuccess("Access request sent to Main Admin for approval.");
+          setTimeout(() => setShowLoginModal(false), 3000);
+        } else {
+          setLoginError("Failed to submit request.");
+        }
+      } catch (err) {
+        setLoginError("Network error.");
+      }
+    } else {
+      try {
+        const res = await fetch(`${apiBase}/api/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: loginId, password })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          setUser(data.user);
+          localStorage.setItem("aegis_user", JSON.stringify(data.user));
+          setShowLoginModal(false);
+        } else {
+          setLoginError(data.detail || "Invalid credentials or pending approval.");
+        }
+      } catch (err) {
+        setLoginError("Network error.");
+      }
+    }
+  };
 
-  const handleDrawComplete = useCallback((geo: any) => {
-    setGeojson(geo);
-  }, []);
+  const logout = () => {
+    setUser(null);
+    localStorage.removeItem("aegis_user");
+  };
 
   return (
     <div data-theme={theme} style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100vw", background: "var(--bg-deep)", overflow: "hidden", transition: "background 0.3s ease" }}>
 
       {/* ── TOP NAVBAR ── */}
       <nav style={{
-        height: 48, flexShrink: 0,
+        height: 54, flexShrink: 0,
         background: "var(--bg-panel)",
         borderBottom: "1px solid var(--border)",
         display: "flex", alignItems: "center",
@@ -86,51 +91,62 @@ export default function HomePage() {
         {/* Logo */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <div style={{
-            width: 28, height: 28, borderRadius: 4,
-            background: "var(--accent)",
+            width: 32, height: 32, borderRadius: 6,
+            background: "var(--sev-9)", // red badge
             display: "flex", alignItems: "center", justifyContent: "center",
           }}>
-            <Satellite size={14} color="#ffffff" />
+            <Shield size={16} color="#ffffff" />
           </div>
           <div>
-            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 600, fontSize: 14, color: "var(--text-1)" }}>
-              BhūDrishti
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16, color: "var(--text-1)", letterSpacing: "0.5px" }}>
+              AEGIS
             </div>
-            <div style={{ fontSize: 9, color: "var(--text-3)", letterSpacing: "0.4px" }}>भूदृष्टि · Satellite Intelligence</div>
+            <div style={{ fontSize: 10, color: "var(--text-3)", letterSpacing: "0.5px", textTransform: 'uppercase' }}>Agentic Relief Coordinator</div>
           </div>
         </div>
 
-        <div style={{ width: 1, height: 20, background: "var(--border)", flexShrink: 0 }} />
+        <div style={{ width: 1, height: 24, background: "var(--border)", flexShrink: 0, marginLeft: 10, marginRight: 10 }} />
 
-        {/* Module Tabs */}
-        <div style={{ display: "flex", gap: 4, flex: 1, overflowX: "auto" }}>
-          {NAV_MODULES.map(m => (
-            <button
-              key={m.label}
-              onClick={() => setActiveModule(activeModule === m.module ? null : m.module)}
-              style={{
-                background: activeModule === m.module ? "var(--bg-card)" : "transparent",
-                border: `1px solid ${activeModule === m.module ? "var(--border-mid)" : "transparent"}`,
-                borderRadius: 4, padding: "4px 11px",
-                fontSize: 11, cursor: "pointer", whiteSpace: "nowrap",
-                color: activeModule === m.module ? "var(--text-1)" : "var(--text-2)",
-                transition: "all 0.18s",
-                display: "flex", alignItems: "center", gap: 5,
-                fontFamily: "'JetBrains Mono', monospace", fontWeight: 500,
-              }}
-              onMouseEnter={e => { if (activeModule !== m.module) (e.currentTarget as HTMLButtonElement).style.color = "var(--text-1)"; }}
-              onMouseLeave={e => { if (activeModule !== m.module) (e.currentTarget as HTMLButtonElement).style.color = "var(--text-2)"; }}
+        {/* Dynamic Nav Buttons */}
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, overflowX: 'auto' }}>
+          
+          <button 
+            onClick={() => setShowStatusModal(true)}
+            className="btn-secondary" 
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer' }}
+          >
+            <FileSearch size={14} /> Check Report Status
+          </button>
+
+          {!user ? (
+            <button 
+              onClick={() => { setIsNewUser(false); setShowLoginModal(true); }}
+              className="btn-primary" 
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer', background: 'rgba(56,189,248,0.1)', color: '#38bdf8', border: '1px solid rgba(56,189,248,0.3)' }}
             >
-              <span>{m.icon}</span> {m.label}
+              <LogIn size={14} /> NDRF / SEOC / Dispatcher Login
             </button>
-          ))}
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-2)', fontFamily: "'JetBrains Mono', monospace", border: '1px solid var(--border)', padding: '4px 8px', borderRadius: 4 }}>
+                Logged in as: <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{user.username}</span> ({user.role})
+              </span>
+              <button 
+                onClick={logout}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer', background: 'transparent', color: 'var(--text-3)', border: '1px solid var(--border)' }}
+              >
+                <LogOut size={14} /> Logout
+              </button>
+            </div>
+          )}
+
         </div>
 
-        {/* Right side */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        {/* Right side static indicators */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
           <div className="status-live hide-on-mobile" style={{ borderRadius: 4, background: "transparent", border: "1px solid var(--border)", padding: "4px 9px", fontFamily: "'JetBrains Mono', monospace" }}>
             <span className="status-dot" style={{ background: "var(--accent)" }} />
-            <span style={{ fontSize: 10, color: "var(--text-2)", fontWeight: 500 }}>Live APIs</span>
+            <span style={{ fontSize: 10, color: "var(--text-2)", fontWeight: 500 }}>System Active</span>
           </div>
           <div className="hide-on-mobile" style={{
             background: "transparent", border: "1px solid var(--border)",
@@ -139,35 +155,7 @@ export default function HomePage() {
             display: "flex", alignItems: "center", gap: 4, fontFamily: "'JetBrains Mono', monospace"
           }}>
             <Globe2 size={10} color="var(--text-3)" />
-            SIH 2026 · PS-26167
-          </div>
-
-          <div style={{ width: 1, height: 20, background: "var(--border)", margin: '0 8px' }} />
-
-          {/* Mode Switcher */}
-          <div style={{ display: 'flex', background: 'var(--bg-card)', borderRadius: 20, padding: 2, border: '1px solid var(--border)' }}>
-            <button
-              onClick={() => setMode('satellite')}
-              style={{
-                padding: '4px 12px', fontSize: 11, borderRadius: 18, border: 'none', cursor: 'pointer',
-                background: mode === 'satellite' ? 'var(--accent)' : 'transparent',
-                color: mode === 'satellite' ? '#fff' : 'var(--text-2)',
-                fontWeight: mode === 'satellite' ? 600 : 400
-              }}
-            >
-              Satellite Intel
-            </button>
-            <button
-              onClick={() => setMode('command')}
-              style={{
-                padding: '4px 12px', fontSize: 11, borderRadius: 18, border: 'none', cursor: 'pointer',
-                background: mode === 'command' ? 'var(--sev-7)' : 'transparent',
-                color: mode === 'command' ? '#fff' : 'var(--text-2)',
-                fontWeight: mode === 'command' ? 600 : 400
-              }}
-            >
-              Command Center
-            </button>
+            SIH 2026 · PS20
           </div>
 
           <div style={{ width: 1, height: 20, background: "var(--border)", margin: '0 8px' }} />
@@ -175,33 +163,13 @@ export default function HomePage() {
           {/* Theme toggle */}
           <button
             className="btn-icon"
-            style={{ width: 28, height: 28, fontSize: 10 }}
+            style={{ width: 28, height: 28, fontSize: 10, cursor: 'pointer', background: 'transparent', border: 'none', color: 'var(--text-2)' }}
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             title="Toggle Theme"
           >
-            {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
+            {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
           </button>
 
-          {/* Info panel toggle */}
-          <button
-            className="btn-icon hide-on-mobile"
-            style={{ width: 28, height: 28, fontSize: 10 }}
-            onClick={() => setInfoOpen(!infoOpen)}
-            title="Data sources & models"
-          >
-            <Database size={13} />
-          </button>
-
-          {/* Chat toggle */}
-          <button
-            className="btn-primary"
-            style={{ padding: "4px 12px", fontSize: 11, display: "flex", alignItems: "center", gap: 5 }}
-            onClick={() => setChatOpen(!chatOpen)}
-          >
-            <Satellite size={12} />
-            {chatOpen ? "Hide" : "Ask Satellite"}
-            {chatOpen ? <ChevronRight size={12} /> : <ChevronLeft size={12} />}
-          </button>
         </div>
       </nav>
 
@@ -209,88 +177,91 @@ export default function HomePage() {
       <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
 
         {/* Map takes full space */}
-        <MapPanel
-          imageUrl={satData.imageUrl}
-          geeTileUrl={satData.geeTileUrl}
-          bbox={satData.bbox}
-          centerLat={satData.centerLat}
-          centerLon={satData.centerLon}
-          module={satData.module || activeModule || undefined}
-          stats={stats}
-          onDrawComplete={handleDrawComplete}
-        />
+        <MapPanel apiBase={apiBase} onMapClick={setClickedCoords} isAdmin={user?.role === 'admin'} />
+        
+        {/* Pass user to dashboard so it knows to show Analytics/Approval features */}
+        <CommandDashboard apiBase={apiBase} clickedCoords={clickedCoords} user={user} />
 
-        {/* ── Command Center Overlay ── */}
-        {mode === 'command' && (
-          <CommandDashboard apiBase="http://localhost:8000" />
-        )}
-
-        {/* ── Floating Chat Panel (right side) ── */}
-        {mode === 'satellite' && chatOpen && (
-          <div className="panel-in chat-panel-container">
-            <ChatPanel
-              onImageUpdate={handleImageUpdate}
-              onStatsUpdate={handleStatsUpdate}
-              geojson={geojson}
-            />
-          </div>
-        )}
-
-        {/* ── Floating Info Panel (left side) ── */}
-        {mode === 'satellite' && infoOpen && (
-          <div className="panel-in info-panel-container">
-            <div style={{ padding: "14px 14px 0", borderBottom: "1px solid var(--border)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 12 }}>
-                <Database size={13} color="var(--accent)" />
-                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "'Space Grotesk',sans-serif" }}>Data Sources</span>
-              </div>
-            </div>
-            <div style={{ padding: 10, overflowY: "auto", height: "calc(100% - 44px)" }}>
-              <div style={{ marginBottom: 8 }}>
-                {DATA_SOURCES.map(s => (
-                  <div key={s.name} style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                    padding: "7px 10px", marginBottom: 4,
-                    background: "var(--bg-card)", borderRadius: 8,
-                    border: "1px solid var(--border)",
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                      <span style={{ fontSize: 13 }}>{s.icon}</span>
-                      <span style={{ fontSize: 11, color: "var(--text-2)" }}>{s.name}</span>
-                    </div>
-                    <span style={{ fontSize: 9, color: "var(--accent-green)", fontWeight: 700, display: "flex", alignItems: "center", gap: 3 }}>
-                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--accent-green)", display: "inline-block" }} />
-                      {s.status}
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text-3)", marginBottom: 7, marginTop: 12, display: "flex", alignItems: "center", gap: 5 }}>
-                <Cpu size={10} /> AI MODELS
-              </div>
-              {AI_MODELS.map(m => (
-                <div key={m.name} style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "7px 10px", marginBottom: 4,
-                  background: "var(--bg-card)", borderRadius: 8,
-                  border: "1px solid var(--border)",
-                }}>
-                  <span style={{ fontSize: 11, color: "var(--text-2)" }}>{m.name}</span>
-                  <span className={`badge ${m.badge}`}>{m.tag}</span>
-                </div>
-              ))}
-
-              <div style={{ marginTop: 14, padding: "10px", background: "var(--bg-hover)", border: "1px solid var(--border-mid)", borderRadius: 10 }}>
-                <div style={{ fontSize: 10, color: "var(--text-3)", marginBottom: 10, textAlign: "center", letterSpacing: "1px" }}>DATA PIPELINE</div>
-                <div style={{ fontSize: 10, color: "var(--accent)", lineHeight: 1.8, fontFamily: "'JetBrains Mono', monospace" }}>
-                  Query → STAC Search → GEE Compute → Gemini Vision → Geo-overlay
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* LOGIN / REQUEST ACCESS MODAL */}
+      {showLoginModal && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000
+        }}>
+          <div style={{ width: 400, background: 'var(--bg-deep)', borderRadius: 16, padding: 24, border: '1px solid var(--border)', position: 'relative' }}>
+            <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>
+              {isNewUser ? "Request Access" : "Command Officer Login"}
+            </h2>
+            <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 20 }}>
+              {isNewUser ? "Submit an ID for the Main Admin to approve." : "Access the God's-Eye View and Analytics Dashboard."}
+            </p>
+            
+            <form onSubmit={handleAuth} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>LOGIN ID / USERNAME</label>
+                <input required type="text" value={loginId} onChange={e => setLoginId(e.target.value)}
+                  style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)', padding: '10px 12px', borderRadius: 8, color: 'var(--text-1)' }}
+                  placeholder="e.g. admin" />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>PASSWORD</label>
+                <input required type="password" value={password} onChange={e => setPassword(e.target.value)}
+                  style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)', padding: '10px 12px', borderRadius: 8, color: 'var(--text-1)' }}
+                  placeholder="••••••••" />
+              </div>
+              
+              {loginError && <div style={{ fontSize: 12, color: '#ef4444' }}>{loginError}</div>}
+              {loginSuccess && <div style={{ fontSize: 12, color: '#22c55e' }}>{loginSuccess}</div>}
+              
+              <button type="submit" className="btn-primary" style={{ marginTop: 8, padding: 12, borderRadius: 8, fontWeight: 600 }}>
+                {isNewUser ? "Submit Request" : "Login"}
+              </button>
+            </form>
+
+            <div style={{ marginTop: 16, textAlign: 'center' }}>
+              <button onClick={() => setIsNewUser(!isNewUser)} style={{ background: 'transparent', border: 'none', color: 'var(--accent)', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}>
+                {isNewUser ? "Already have an account? Login here." : "New Dispatcher? Request Access here."}
+              </button>
+            </div>
+            
+            <button onClick={() => setShowLoginModal(false)} style={{ position: 'absolute', top: 16, right: 16, background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 18 }}>×</button>
+          </div>
+        </div>
+      )}
+
+      {/* CHECK STATUS MODAL */}
+      {showStatusModal && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(5px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000
+        }}>
+          <div style={{ width: 450, background: 'var(--bg-deep)', borderRadius: 16, padding: 24, border: '1px solid var(--border)', position: 'relative' }}>
+            <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Check Report Status</h2>
+            <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 20 }}>
+              Enter your mobile number or report ID to check deployment status and ETA for help.
+            </p>
+            
+            <form onSubmit={(e) => { e.preventDefault(); alert("Checking database... (Demo mode)"); setShowStatusModal(false); }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>REPORT ID OR MOBILE NUMBER</label>
+                <input required type="text"
+                  style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)', padding: '10px 12px', borderRadius: 8, color: 'var(--text-1)' }}
+                  placeholder="e.g. REP-1029 or +91-9876543210" />
+              </div>
+              <button type="submit" className="btn-primary" style={{ marginTop: 8, padding: 12, borderRadius: 8, fontWeight: 600 }}>
+                Check Status
+              </button>
+            </form>
+            
+            <button onClick={() => setShowStatusModal(false)} style={{ position: 'absolute', top: 16, right: 16, background: 'transparent', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 18 }}>×</button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

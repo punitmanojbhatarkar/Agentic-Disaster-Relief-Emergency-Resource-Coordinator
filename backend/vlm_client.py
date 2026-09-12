@@ -10,8 +10,6 @@ import datetime
 from openai import OpenAI
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is missing from environment variables.")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "YOUR_NVIDIA_API_KEY")
 
 nvidia_client = OpenAI(

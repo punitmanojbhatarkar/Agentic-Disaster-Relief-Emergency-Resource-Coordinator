@@ -8,20 +8,90 @@ Pipeline:
 """
 import json
 import re
-from fastapi import FastAPI
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from stac_client import (
+from backend.models.user import UserLogin, UserRequest, AccessApproval
+from backend.stac_client import (
     search_sentinel1_sar, search_sentinel2,
     get_bbox_for_location, BBOXES, get_real_weather
 )
-from gee_client import calculate_real_ndvi, calculate_water_area, get_gee_map_tile
-from vlm_client import analyze_image_with_gemini, analyze_image_with_nvidia, translate_text
+from backend.gee_client import calculate_real_ndvi, calculate_water_area, get_gee_map_tile
+from backend.vlm_client import analyze_image_with_gemini, analyze_image_with_nvidia, translate_text
+from backend.agents.credibility_agent import verify_credibility
+from backend.agents.protocol_rag_agent import check_sop_compliance
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
 app = FastAPI(title="BhuDrishti v4.0")
 
+# ── WebSockets Manager ──
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                pass
+
+manager = ConnectionManager()
+
+async def broadcast_state():
+    from backend.store.state import state
+    # Wait a tiny bit to ensure DB commit is visible if needed
+    import asyncio
+    await asyncio.sleep(0.1)
+    await manager.broadcast({
+        "type": "state_update",
+        "zones": state.zones,
+        "pending_zones": state.pending_zones,
+        "inventory": state.inventory,
+        "assignments": state.assignments,
+        "audit_log": state.audit_log,
+        "coordination_matrix": state.coordination_matrix
+    })
+
+@app.websocket("/api/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # We don't expect messages from client currently, just keep alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+main_loop = None
+
+@app.on_event("startup")
+async def startup_event():
+    global main_loop
+    import asyncio
+    main_loop = asyncio.get_running_loop()
+    from backend.tasks.gdacs_poller import start_gdacs_poller
+    start_gdacs_poller()
+
+def trigger_broadcast():
+    global main_loop
+    if main_loop:
+        import asyncio
+        asyncio.run_coroutine_threadsafe(broadcast_state(), main_loop)
+
+    
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_credentials=False,
@@ -118,9 +188,8 @@ import json
 
 import os
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is missing from environment variables.")
-genai.configure(api_key=GEMINI_API_KEY)
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 router_model = genai.GenerativeModel("gemini-3.7-flash")
 
 # ── Intent Detection ──────────────────────────────────────────────────
@@ -474,9 +543,121 @@ from backend.agents.severity_scorer import score_zone
 from backend.agents.allocation_agent import run_allocation
 from backend.agents.agency_coordinator import handle_assignment_status_change
 from backend.agents.reallocation_agent import trigger_reallocation
+from backend.services.facility_finder import find_nearest_facilities
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 import uuid
+import threading
+
+def enrich_zone_data(location: str, description: str) -> dict:
+    """
+    Step 1: Use Gemini + Google Search grounding to find REAL affected area polygon
+            from news articles, flood reports, and disaster databases on the internet.
+    Step 2: If real data is not found, fall back to AI-estimated polygon.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {}
+    
+    try:
+        from google import genai as google_genai
+        from google.genai import types as genai_types
+        
+        client = google_genai.Client(api_key=api_key)
+        
+        # ── STEP 1: Internet Search for Real Flood Data ──
+        search_prompt = f"""
+You are a disaster intelligence analyst. Search the internet for real data about this disaster:
+
+Location: {location}
+Description: {description}
+
+Use Google Search to find:
+1. Recent news articles or satellite reports about flooding/disaster in this area
+2. The actual geographic extent (approximate lat/lon bounding coordinates) of the affected region
+3. Estimated affected population
+4. Area in square kilometers that is affected/flooded
+
+Based on your search results, return a JSON object with:
+- lat: center latitude (float)
+- lon: center longitude (float)
+- population: affected population (integer)
+- gee_area_km2: affected area in km² (float)
+- severity_reported: severity score 1-10 based on actual reports (integer)
+- polygon_coords: list of at least 8 coordinate points forming a realistic polygon around the actual affected area.
+  Each point is an object with "lat" and "lon" keys.
+  The polygon should reflect the REAL geographic shape of the affected area based on river paths, terrain, and news reports.
+  The first and last point MUST be identical to close the polygon.
+- data_source: "internet" if you found real reports, "estimated" if you had to estimate
+
+IMPORTANT: If you find real satellite or news data about this specific flood, use those actual coordinates.
+If not found, use your geographic knowledge to create a realistic estimate.
+
+Return ONLY valid JSON, no markdown.
+"""
+        
+        grounded_response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=search_prompt,
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                temperature=0.2,
+            )
+        )
+        
+        # Parse the grounded response
+        raw_text = grounded_response.text.strip()
+        # Strip any markdown code fences
+        if raw_text.startswith("```"):
+            raw_text = re.sub(r"```(?:json)?", "", raw_text).replace("```", "").strip()
+        
+        enriched = json.loads(raw_text)
+        data_source = enriched.pop("data_source", "estimated")
+        print(f"[SatelliteIntel] Data source for {location}: {data_source}")
+        return enriched
+        
+    except Exception as e:
+        print(f"[SatelliteIntel] Google Search grounding failed: {e}, falling back to estimation...")
+        
+    # ── STEP 2: Fallback — Pure AI Estimation (no internet) ──
+    try:
+        from google import genai as google_genai
+        from google.genai import types as genai_types
+        
+        client = google_genai.Client(api_key=api_key)
+        
+        fallback_prompt = f"""
+You are a disaster GIS analyst. Based on your geographic knowledge, estimate the affected area for:
+
+Location: {location}
+Disaster description: {description}
+
+Return a JSON object with:
+- lat: center latitude (float)
+- lon: center longitude (float)  
+- population: estimated affected population (integer)
+- gee_area_km2: estimated affected area in km² (float)
+- severity_reported: severity 1-10 (integer)
+- polygon_coords: list of at least 8 points as objects with "lat" and "lon" keys,
+  forming a realistic jagged polygon around the disaster zone.
+  Base the polygon shape on the local geography (rivers, valleys, flood plains).
+  First and last point must be identical.
+
+Return ONLY valid JSON, no markdown.
+"""
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=fallback_prompt,
+            config=genai_types.GenerateContentConfig(temperature=0.3)
+        )
+        raw_text = response.text.strip()
+        if raw_text.startswith("```"):
+            raw_text = re.sub(r"```(?:json)?", "", raw_text).replace("```", "").strip()
+        return json.loads(raw_text)
+        
+    except Exception as e2:
+        print(f"[SatelliteIntel] Fallback estimation also failed: {e2}")
+        return {}
 
 @app.post("/api/zones/report")
 def report_zone(report: Dict[str, Any]):
@@ -485,22 +666,435 @@ def report_zone(report: Dict[str, Any]):
         zone_id = f"zone-{str(uuid.uuid4())[:8]}"
         report["zone_id"] = zone_id
         
+    # If this is from a citizen (indicated by default 1000 population or 0 lat/lon), run Satellite Intel!
+    if report.get("population") == 1000 or (report.get("lat") == 0 and report.get("lon") == 0):
+        enriched = enrich_zone_data(report.get("location", ""), report.get("description", ""))
+        if enriched:
+            report["lat"] = enriched.get("lat", report.get("lat"))
+            report["lon"] = enriched.get("lon", report.get("lon"))
+            report["population"] = enriched.get("population", report.get("population"))
+            report["gee_area_km2"] = enriched.get("gee_area_km2", report.get("gee_area_km2"))
+            report["severity_reported"] = enriched.get("severity_reported", report.get("severity_reported"))
+            
+            if enriched.get("polygon_coords") and len(enriched["polygon_coords"]) > 3:
+                # Ensure closed polygon
+                coords = [[pt["lon"], pt["lat"]] for pt in enriched["polygon_coords"]]
+                if coords[0] != coords[-1]:
+                    coords.append(coords[0])
+                report["geojson"] = {
+                    "type": "FeatureCollection",
+                    "features": [{
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [coords]
+                        },
+                        "properties": {}
+                    }]
+                }
+            
+            # Log the satellite analysis
+            state.audit_log.append({
+                "timestamp": datetime.utcnow().isoformat(),
+                "agent": "SatelliteIntel",
+                "event_type": "satellite_analysis",
+                "zone_id": zone_id,
+                "description": f"SAR/Optical satellite analysis for {report.get('location')}. Est Area: {report['gee_area_km2']}km², Pop: {report['population']}"
+            })
+            
+    # -- DEDUPLICATION / CLUSTERING --
+    new_lat = report.get("lat", 0)
+    new_lon = report.get("lon", 0)
+    new_loc = report.get("location", "").lower()
+    
+    merged_zone_id = None
+    for z_dict in [state.pending_zones, state.zones]:
+        for zid, existing in z_dict.items():
+            ext_lat = existing.get("lat", 0)
+            ext_lon = existing.get("lon", 0)
+            ext_loc = existing.get("location", "").lower()
+            
+            is_same_loc = (new_loc and ext_loc and (new_loc in ext_loc or ext_loc in new_loc))
+            is_close = (new_lat and new_lon and ext_lat and ext_lon and 
+                        abs(new_lat - ext_lat) < 0.5 and abs(new_lon - ext_lon) < 0.5)
+                        
+            if is_same_loc or is_close:
+                merged_zone_id = zid
+                current_sev = existing.get("severity_reported", 5)
+                existing["severity_reported"] = min(10.0, current_sev + 1.0)
+                existing["description"] = f"{existing.get('description', '')} | [UPDATE]: Additional report: {report.get('description', '')}"
+                
+                # Re-evaluate AI needs due to increased severity if it's pending
+                if zid in state.pending_zones:
+                    zr_update = ZoneReport(**existing)
+                    existing["needs"] = assess_needs(zr_update)
+                    
+                z_dict[zid] = existing
+                state.save()
+                
+                state.audit_log.append({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "agent": "CommandCenter",
+                    "event_type": "incident_merged",
+                    "zone_id": merged_zone_id,
+                    "description": f"New report clustered into existing zone {merged_zone_id}. Severity bumped to {existing['severity_reported']}."
+                })
+                break
+        if merged_zone_id:
+            break
+            
+    if merged_zone_id:
+        trigger_broadcast()
+        return {"status": "merged", "zone_id": merged_zone_id, "message": "Incident clustered with existing zone."}
+
+    # -- CREDIBILITY AGENT --
+    cred = verify_credibility(
+        location=report.get("location", ""),
+        description=report.get("description", ""),
+        lat=report.get("lat", 0),
+        lon=report.get("lon", 0),
+        reported_severity=report.get("severity_reported", 5)
+    )
+    report["credibility"] = cred
+    state.audit_log.append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "agent": "CredibilityAgent",
+        "event_type": "CREDIBILITY_CHECK",
+        "zone_id": zone_id,
+        "description": f"Credibility: {cred.get('status')} ({cred.get('score')}%) - {cred.get('reasoning')}"
+    })
+        
     if "needs" not in report or not report["needs"]:
         zr = ZoneReport(**report, needs={})
         report["needs"] = assess_needs(zr)
         
+    # -- PROTOCOL RAG AGENT --
+    sop_check = check_sop_compliance(
+        needs=report["needs"],
+        location=report.get("location", ""),
+        description=report.get("description", ""),
+        population=report.get("population", 1000),
+        severity=report.get("severity_reported", 5)
+    )
+    report["sop_compliance"] = sop_check
+    state.audit_log.append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "agent": "ProtocolRAG",
+        "event_type": "PROTOCOL_RAG_CHECK",
+        "zone_id": zone_id,
+        "description": f"SOP Check: {'Compliant' if sop_check.get('is_compliant') else 'VIOLATION DETECTED'} (Score: {sop_check.get('compliance_score')})"
+    })
+    
+    # Preserve original needs before allocation modifies them
+    report["original_needs"] = dict(report["needs"])
+        
     zr = ZoneReport(**report)
     zr = score_zone(zr)
     
-    state.zones[zone_id] = zr.model_dump()
+    state.pending_zones[zone_id] = zr.model_dump()
     state.save()
-    run_allocation()
     
-    return {"status": "success", "zone_id": zone_id, "zone": state.zones[zone_id]}
+    # ── Background Facility Lookup (non-blocking) ──
+    final_lat = report.get("lat")
+    final_lon = report.get("lon")
+    if final_lat and final_lon:
+        def _fetch_and_attach_facilities(zid, lat, lon):
+            try:
+                print(f"[FacilityFinder] Searching for facilities near {lat},{lon}...")
+                facilities = find_nearest_facilities(lat, lon, radius_km=100)
+                if zid in state.zones:
+                    state.zones[zid]["nearest_facilities"] = facilities
+                    state.save()
+                    print(f"[FacilityFinder] Found {len(facilities)} facilities for {zid}")
+                elif zid in state.pending_zones:
+                    state.pending_zones[zid]["nearest_facilities"] = facilities
+                    state.save()
+                    print(f"[FacilityFinder] Found {len(facilities)} facilities for pending {zid}")
+                
+                if zid in state.zones or zid in state.pending_zones:
+                    try:
+                        from backend.main import trigger_broadcast
+                        trigger_broadcast()
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[FacilityFinder] Failed: {e}")
+        
+        t = threading.Thread(
+            target=_fetch_and_attach_facilities,
+            args=(zone_id, final_lat, final_lon),
+            daemon=True
+        )
+        t.start()
+    
+    return {"status": "success", "zone_id": zone_id, "zone": state.pending_zones[zone_id]}
 
 @app.get("/api/zones")
 def get_zones():
     return state.zones
+
+@app.get("/api/zones/pending")
+def get_pending_zones():
+    return state.pending_zones
+
+@app.post("/api/zones/{zone_id}/approve")
+def approve_zone(zone_id: str, body: dict = None):
+    if zone_id not in state.pending_zones:
+        return {"error": "Pending zone not found"}
+    
+    if body and "needs" in body:
+        state.pending_zones[zone_id]["needs"] = body["needs"]
+            
+    zone_data = state.pending_zones.pop(zone_id)
+    state.zones[zone_id] = zone_data
+    state.save()
+    run_allocation()
+    trigger_broadcast()
+    return {"status": "success", "zone_id": zone_id}
+
+@app.post("/api/zones/{zone_id}/reject")
+def reject_zone(zone_id: str):
+    if zone_id in state.pending_zones:
+        del state.pending_zones[zone_id]
+        state.save()
+        trigger_broadcast()
+        return {"status": "success"}
+    return {"error": "Pending zone not found"}
+
+@app.post("/api/zones/{zone_id}/resolve")
+def resolve_zone(zone_id: str):
+    if zone_id in state.zones:
+        del state.zones[zone_id]
+        state.save()
+        trigger_broadcast()
+        return {"status": "success"}
+    return {"error": "Active zone not found"}
+
+@app.post("/api/zones/{zone_id}/ai-verdict")
+def ai_verdict(zone_id: str):
+    """
+    AI Decision Support: analyses a pending zone and returns a structured
+    APPROVE / COMPROMISE / REJECT recommendation with resource availability check.
+    """
+    zone = state.pending_zones.get(zone_id) or state.zones.get(zone_id)
+    if not zone:
+        return {"error": "Zone not found"}
+
+    # Build resource availability context
+    needs = zone.get("needs", {})
+    resource_availability = {}
+    for res, qty_needed in needs.items():
+        if res in ("rationale", "accessibility", "primary_agency"):
+            continue
+        qty_needed = int(qty_needed or 0)
+        avail = state.inventory.get(res, {}).get("available", 0)
+        resource_availability[res] = {
+            "needed": qty_needed,
+            "available": avail,
+            "sufficient": avail >= qty_needed
+        }
+
+    # Build facilities context
+    facilities = zone.get("nearest_facilities", [])
+    facility_lines = "\n".join([
+        f"  - {f.get('name')} ({f.get('type')}) — {f.get('distance_km')}km, ETA {f.get('eta_minutes')}min"
+        for f in facilities[:6]
+    ]) or "  - No pre-fetched facility data available."
+
+    # Resource availability summary
+    res_lines = "\n".join([
+        f"  - {res}: {info['available']} available, {info['needed']} needed → {'✅ Sufficient' if info['sufficient'] else '⚠️ SHORTAGE'}"
+        for res, info in resource_availability.items()
+    ]) or "  - No resource needs specified."
+
+    shortages = [res for res, info in resource_availability.items() if not info["sufficient"]]
+    all_sufficient = len(shortages) == 0
+
+    prompt = f"""You are an Indian NDRF (National Disaster Response Force) senior operations commander AI.
+A disaster incident has been reported and is PENDING admin approval.
+Analyse ALL factors below and produce a structured decision.
+
+=== INCIDENT DETAILS ===
+Zone ID: {zone.get('zone_id')}
+Location: {zone.get('location')}
+Severity (AI-assessed): {zone.get('severity_final', zone.get('severity_reported', 'Unknown'))}/10
+Population Affected: {zone.get('population', 'Unknown')}
+Satellite Area: {zone.get('gee_area_km2', 'N/A')} km²
+Accessibility: {zone.get('needs', {}).get('accessibility', 'Unknown')}
+Primary Suggested Agency: {zone.get('needs', {}).get('primary_agency', 'NDRF')}
+Credibility Score: {zone.get('credibility', {}).get('score', 'N/A')}% ({zone.get('credibility', {}).get('status', 'Unknown')})
+Credibility Reasoning: {zone.get('credibility', {}).get('reasoning', 'N/A')}
+NDMA SOP Compliant: {zone.get('sop_compliance', {}).get('is_compliant', 'Unknown')}
+
+=== RESOURCE REQUEST vs INVENTORY ===
+{res_lines}
+
+=== NEAREST RESPONSE FACILITIES ===
+{facility_lines}
+
+=== YOUR TASK ===
+Based on severity, credibility, resource availability, and facility proximity, decide:
+- APPROVE: Incident is credible, resources sufficient, dispatch immediately.
+- COMPROMISE: Incident is real but resources are low — suggest a partial allocation or resource divert.
+- REJECT: Incident is not credible, duplicate, or requesting implausible resources.
+
+Respond in this EXACT JSON format only, no other text:
+{{
+  "verdict": "APPROVE" | "COMPROMISE" | "REJECT",
+  "confidence": <integer 0-100>,
+  "reasoning": "<2-3 sentence explanation for the admin>",
+  "compromise_suggestion": "<only if COMPROMISE: what reduced allocation to approve, else null>",
+  "key_risk": "<biggest risk factor in 1 sentence>"
+}}"""
+
+    try:
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        # Strip markdown code fences if present
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        import json as _json
+        verdict_data = _json.loads(text.strip())
+        verdict_data["resource_availability"] = resource_availability
+        return verdict_data
+    except Exception as e:
+        # Fallback rule-based verdict
+        if not all_sufficient and zone.get('credibility', {}).get('score', 100) < 40:
+            verdict = "REJECT"
+            reasoning = f"Credibility score is very low and {len(shortages)} resources are in shortage. Recommend rejection pending field verification."
+        elif not all_sufficient:
+            verdict = "COMPROMISE"
+            reasoning = f"Incident appears credible but {len(shortages)} resource(s) are in shortage: {', '.join(shortages)}. Recommend partial allocation."
+        else:
+            verdict = "APPROVE"
+            reasoning = "All requested resources are available and the incident meets NDMA SOP requirements. Recommend immediate dispatch."
+        return {
+            "verdict": verdict,
+            "confidence": 70,
+            "reasoning": reasoning,
+            "compromise_suggestion": f"Allocate 50% of {', '.join(shortages)}" if shortages else None,
+            "key_risk": "AI analysis unavailable — rule-based fallback used.",
+            "resource_availability": resource_availability
+        }
+
+@app.get("/api/zones/{zone_id}/divert-options")
+def get_divert_options(zone_id: str, resource: str):
+    if zone_id not in state.pending_zones:
+        return {"error": "Pending zone not found"}
+    
+    pending_zone = state.pending_zones[zone_id]
+    pending_severity = pending_zone.get("severity_final", pending_zone.get("severity_reported", 0))
+    
+    options = []
+    for assignment in state.assignments:
+        if assignment.get("resource_type") == resource and assignment.get("quantity", 0) > 0:
+            target_zone_id = assignment.get("zone_id")
+            if target_zone_id in state.zones:
+                target_zone = state.zones[target_zone_id]
+                target_severity = target_zone.get("severity_final", 0)
+                if target_severity <= 6.0 and target_severity < pending_severity - 1.0:
+                    options.append({
+                        "assignment_id": assignment.get("id"),
+                        "from_zone_id": target_zone_id,
+                        "from_zone_location": target_zone.get("location"),
+                        "from_zone_severity": target_severity,
+                        "quantity": assignment.get("quantity")
+                    })
+    return {"options": options}
+
+class DivertRequest(BaseModel):
+    from_assignment_id: str
+    quantity: int
+
+@app.post("/api/zones/{zone_id}/divert")
+def divert_resources(zone_id: str, req: DivertRequest):
+    if zone_id not in state.pending_zones:
+        return {"error": "Pending zone not found"}
+        
+    assignment = next((a for a in state.assignments if a.get("id") == req.from_assignment_id), None)
+    if not assignment:
+        return {"error": "Assignment not found"}
+        
+    if req.quantity > assignment.get("quantity", 0):
+        return {"error": "Quantity exceeds assignment"}
+        
+    from_zone_id = assignment.get("zone_id")
+    resource = assignment.get("resource_type")
+    
+    assignment["quantity"] -= req.quantity
+    if assignment["quantity"] <= 0:
+        state.assignments.remove(assignment)
+        state.coordination_matrix = [c for c in state.coordination_matrix if c.get("assignment_id") != req.from_assignment_id]
+        
+    if from_zone_id in state.zones:
+        if "needs" not in state.zones[from_zone_id]:
+            state.zones[from_zone_id]["needs"] = {}
+        state.zones[from_zone_id]["needs"][resource] = state.zones[from_zone_id]["needs"].get(resource, 0) + req.quantity
+
+    import uuid
+    from datetime import datetime, timedelta
+    now = datetime.utcnow()
+    new_assignment_id = str(uuid.uuid4())
+    new_assignment = {
+        "id": new_assignment_id,
+        "zone_id": zone_id,
+        "agency_id": assignment.get("agency_id"),
+        "resource_type": resource,
+        "quantity": req.quantity,
+        "status": "diverted",
+        "reasoning": f"EMERGENCY DIVERT from {from_zone_id} to {zone_id} (Robin Hood Protocol)",
+        "time_window_start": now.isoformat(),
+        "time_window_end": (now + timedelta(hours=2)).isoformat(),
+        "created_at": now.isoformat()
+    }
+    state.assignments.append(new_assignment)
+    
+    state.coordination_matrix.append({
+        "assignment_id": new_assignment_id,
+        "agency_id": new_assignment.get("agency_id"),
+        "resource_type": resource,
+        "zone_id": zone_id,
+        "time_window_start": new_assignment["time_window_start"],
+        "time_window_end": new_assignment["time_window_end"]
+    })
+    
+    state.audit_log.insert(0, {
+        "timestamp": now.isoformat(),
+        "event_type": "EMERGENCY_DIVERT",
+        "description": f"Diverted {req.quantity} {resource} from Zone {from_zone_id} to Zone {zone_id}"
+    })
+    
+    pending_zone = state.pending_zones[zone_id]
+    if "needs" in pending_zone and resource in pending_zone["needs"]:
+        pending_zone["needs"][resource] -= req.quantity
+        if pending_zone["needs"][resource] < 0:
+            pending_zone["needs"][resource] = 0
+
+    state.save()
+    trigger_broadcast()
+    return {"status": "success", "diverted": req.quantity}
+
+@app.get("/api/zones/{zone_id}/facilities")
+def get_zone_facilities(zone_id: str):
+    zone = state.zones.get(zone_id)
+    if not zone:
+        return {"error": "Zone not found"}
+    facilities = zone.get("nearest_facilities", [])
+    # If not yet fetched, trigger background fetch now
+    if not facilities and zone.get("lat") and zone.get("lon"):
+        def _fetch(zid, lat, lon):
+            try:
+                f = find_nearest_facilities(lat, lon, radius_km=100)
+                if zid in state.zones:
+                    state.zones[zid]["nearest_facilities"] = f
+                    state.save()
+            except Exception as e:
+                print(f"[FacilityFinder] On-demand fetch failed: {e}")
+        threading.Thread(target=_fetch, args=(zone_id, zone["lat"], zone["lon"]), daemon=True).start()
+        return {"status": "fetching", "facilities": []}
+    return {"status": "ok", "facilities": facilities}
 
 @app.get("/api/resources")
 def get_resources():
@@ -562,14 +1156,55 @@ def simulate_demo():
     }
     
     zones_data = [
-        {"zone_id": "Zone A", "location": "Jorhat, Assam", "severity_reported": 9, "population": 150000, "gee_area_km2": 2847, "needs": {"ndrf_teams": 5, "medical_kits": 200}, "description": "Severe flooding"},
-        {"zone_id": "Zone B", "location": "Silchar, Assam", "severity_reported": 8, "population": 200000, "gee_area_km2": 1230, "needs": {"food_kg": 80000, "shelter_units": 500}, "description": "Urban flooding"},
-        {"zone_id": "Zone C", "location": "Guwahati, Assam", "severity_reported": 5, "population": 500000, "gee_area_km2": 340, "needs": {"water_liters": 200000, "medical_kits": 100}, "description": "Waterlogging"},
-        {"zone_id": "Zone D", "location": "Dibrugarh, Assam", "severity_reported": 8, "population": 120000, "gee_area_km2": 1890, "needs": {"ndrf_teams": 4, "army_personnel": 200}, "description": "River overflow"},
-        {"zone_id": "Zone E", "location": "Dhubri, Assam", "severity_reported": 6, "population": 80000, "gee_area_km2": 780, "needs": {"shelter_units": 300, "ngo_units": 10}, "description": "Lowland flooding"}
+        {
+            "zone_id": "Zone A", "location": "Jorhat, Assam", "severity_reported": 9, "population": 150000, "gee_area_km2": 2847, 
+            "needs": {"ndrf_teams": 5, "medical_kits": 200}, "description": "Severe flooding", "lat": 26.75, "lon": 94.21,
+            "polygon_coords": [{"lat": 26.70, "lon": 94.15}, {"lat": 26.80, "lon": 94.10}, {"lat": 26.85, "lon": 94.20}, {"lat": 26.80, "lon": 94.30}, {"lat": 26.70, "lon": 94.25}, {"lat": 26.70, "lon": 94.15}]
+        },
+        {
+            "zone_id": "Zone B", "location": "Silchar, Assam", "severity_reported": 8, "population": 200000, "gee_area_km2": 1230, 
+            "needs": {"food_kg": 80000, "shelter_units": 500}, "description": "Urban flooding", "lat": 24.83, "lon": 92.79,
+            "polygon_coords": [{"lat": 24.78, "lon": 92.70}, {"lat": 24.88, "lon": 92.75}, {"lat": 24.90, "lon": 92.85}, {"lat": 24.82, "lon": 92.90}, {"lat": 24.75, "lon": 92.82}, {"lat": 24.78, "lon": 92.70}]
+        },
+        {
+            "zone_id": "Zone C", "location": "Guwahati, Assam", "severity_reported": 5, "population": 500000, "gee_area_km2": 340, 
+            "needs": {"water_liters": 200000, "medical_kits": 100}, "description": "Waterlogging", "lat": 26.14, "lon": 91.74,
+            "polygon_coords": [{"lat": 26.10, "lon": 91.70}, {"lat": 26.18, "lon": 91.72}, {"lat": 26.16, "lon": 91.78}, {"lat": 26.11, "lon": 91.80}, {"lat": 26.08, "lon": 91.75}, {"lat": 26.10, "lon": 91.70}]
+        },
+        {
+            "zone_id": "Zone D", "location": "Dibrugarh, Assam", "severity_reported": 8, "population": 120000, "gee_area_km2": 1890, 
+            "needs": {"ndrf_teams": 4, "army_personnel": 200}, "description": "River overflow", "lat": 27.48, "lon": 94.91,
+            "polygon_coords": [{"lat": 27.43, "lon": 94.85}, {"lat": 27.53, "lon": 94.88}, {"lat": 27.55, "lon": 94.95}, {"lat": 27.48, "lon": 95.00}, {"lat": 27.41, "lon": 94.93}, {"lat": 27.43, "lon": 94.85}]
+        },
+        {
+            "zone_id": "Zone E", "location": "Dhubri, Assam", "severity_reported": 6, "population": 80000, "gee_area_km2": 780, 
+            "needs": {"shelter_units": 300, "ngo_units": 10}, "description": "Lowland flooding", "lat": 26.02, "lon": 89.97,
+            "polygon_coords": [{"lat": 25.98, "lon": 89.92}, {"lat": 26.06, "lon": 89.94}, {"lat": 26.08, "lon": 90.00}, {"lat": 26.03, "lon": 90.05}, {"lat": 25.96, "lon": 89.99}, {"lat": 25.98, "lon": 89.92}]
+        }
     ]
     
     for z_data in zones_data:
+        z_data["original_needs"] = dict(z_data["needs"])  # preserve original before allocation zeros them
+        
+        polygon = z_data.pop("polygon_coords", None)
+        if polygon:
+            z_data["geojson"] = {
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "properties": {},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[pt["lon"], pt["lat"]] for pt in polygon]]
+                    }
+                }]
+            }
+        
+        # Pre-load real facility data using seeded OSM data directly (no network call in demo)
+        from backend.services.facility_finder import SEEDED_FACILITIES, haversine_km
+        city_key = z_data["location"].split(",")[0].strip().lower()
+        z_data["nearest_facilities"] = SEEDED_FACILITIES.get(city_key, [])
+
         zr = ZoneReport(**z_data)
         zr = score_zone(zr)
         state.zones[zr.zone_id] = zr.model_dump()
@@ -580,7 +1215,8 @@ def simulate_demo():
 
 @app.post("/api/simulate/inject-urgent")
 def simulate_inject_urgent():
-    z_data = {"zone_id": "Zone F", "location": "Barpeta, Assam", "severity_reported": 10, "population": 300000, "gee_area_km2": 3200, "needs": {"ndrf_teams": 10, "food_kg": 100000}, "description": "Catastrophic dam release"}
+    z_data = {"zone_id": "Zone F", "location": "Barpeta, Assam", "severity_reported": 10, "population": 300000, "gee_area_km2": 3200, "needs": {"ndrf_teams": 10, "food_kg": 100000}, "description": "Catastrophic dam release", "lat": 26.32, "lon": 90.99}
+    z_data["original_needs"] = dict(z_data["needs"])
     zr = ZoneReport(**z_data)
     zr = score_zone(zr)
     state.zones[zr.zone_id] = zr.model_dump()
@@ -606,3 +1242,69 @@ def resolve_zone(zone_id: str):
     state.save()
     trigger_reallocation(reason=f"Zone {zone_id} resolved")
     return {"status": "Zone resolved"}
+
+# ── User Auth & RBAC Endpoints ──
+
+@app.post("/api/login")
+def login(user: UserLogin):
+    from backend.store.state import state
+    if user.username in state.users:
+        if state.users[user.username]["password"] == user.password:
+            return {
+                "success": True, 
+                "user": {
+                    "username": user.username, 
+                    "role": state.users[user.username]["role"]
+                }
+            }
+        else:
+            raise HTTPException(status_code=401, detail="Invalid password")
+    else:
+        raise HTTPException(status_code=404, detail="User not found")
+
+@app.post("/api/users/request")
+def request_access(request: UserRequest):
+    from backend.store.state import state
+    if request.username in state.users:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    # Check if a request already exists
+    if any(req.get("username") == request.username for req in state.access_requests):
+        raise HTTPException(status_code=400, detail="Access request already pending")
+        
+    state.access_requests.append(request.model_dump())
+    state.save()
+    return {"status": "Access request submitted successfully", "pending": True}
+
+@app.get("/api/users/pending")
+def get_pending_requests():
+    from backend.store.state import state
+    return state.access_requests
+
+@app.post("/api/users/approve")
+def approve_access(approval: AccessApproval):
+    from backend.store.state import state
+    # Find the request
+    req_idx = -1
+    for i, req in enumerate(state.access_requests):
+        if req["username"] == approval.username:
+            req_idx = i
+            break
+            
+    if req_idx == -1:
+        raise HTTPException(status_code=404, detail="Request not found")
+        
+    req = state.access_requests.pop(req_idx)
+    
+    if approval.approved:
+        state.users[req["username"]] = {
+            "password": req["password"],
+            "role": req["role"],
+            "department": req.get("department", "unknown")
+        }
+        status_msg = "User approved and created"
+    else:
+        status_msg = "User request rejected"
+        
+    state.save()
+    return {"status": status_msg}

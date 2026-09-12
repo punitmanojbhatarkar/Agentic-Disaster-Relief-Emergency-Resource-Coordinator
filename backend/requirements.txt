@@ -7,3 +7,8 @@ python-dotenv
 earthengine-api
 google-generativeai
 openai
+websockets
+sqlalchemy
+psycopg2-binary
+feedparser
+twilio

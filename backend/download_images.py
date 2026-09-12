@@ -1,4 +1,4 @@
-﻿import os
+import os
 import urllib.request
 
 os.makedirs("../frontend/public/demo", exist_ok=True)

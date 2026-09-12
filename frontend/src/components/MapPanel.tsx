@@ -1,50 +1,103 @@
 "use client";
-import { useRef, useEffect, useState, useCallback } from "react";
-import { Layers, ZoomIn, ZoomOut, Pencil, RotateCcw, Eye, Image as ImageIcon, CloudRain } from "lucide-react";
+import { useRef, useEffect, useState } from "react";
 
 interface MapPanelProps {
-  imageUrl?: string | null;       
-  geeTileUrl?: string | null;     
-  bbox?: number[] | null;         
-  centerLat?: number | null;
-  centerLon?: number | null;
-  module?: string;
-  stats?: { ndvi?: number; cloud?: number; area?: number; sensor?: string; module?: string };
-  onDrawComplete?: (geojson: any | null) => void;
+  apiBase: string;
+  onMapClick?: (coords: {lat: number, lon: number}) => void;
+  isAdmin?: boolean;
+}
+
+// Real GPS coordinates for Indian cities used in demo
+const CITY_COORDS: Record<string, {lat: number, lon: number}> = {
+  // Assam
+  "jorhat":           { lat: 26.75, lon: 94.21 },
+  "silchar":          { lat: 24.83, lon: 92.79 },
+  "guwahati":         { lat: 26.14, lon: 91.74 },
+  "dibrugarh":        { lat: 27.48, lon: 94.91 },
+  "dhubri":           { lat: 26.02, lon: 89.97 },
+  "barpeta":          { lat: 26.32, lon: 90.99 },
+  "kaziranga":        { lat: 26.58, lon: 93.37 },
+  "tezpur":           { lat: 26.63, lon: 92.80 },
+  "nagaon":           { lat: 26.35, lon: 92.68 },
+  "lakhimpur":        { lat: 27.23, lon: 94.10 },
+  // Maharashtra
+  "mumbai":           { lat: 19.07, lon: 72.88 },
+  "andheri":          { lat: 19.11, lon: 72.87 },
+  "pune":             { lat: 18.52, lon: 73.86 },
+  "nagpur":           { lat: 21.15, lon: 79.09 },
+  // Delhi / NCR
+  "delhi":            { lat: 28.61, lon: 77.21 },
+  "new delhi":        { lat: 28.61, lon: 77.21 },
+  "connaught":        { lat: 28.63, lon: 77.22 },
+  "noida":            { lat: 28.54, lon: 77.39 },
+  "gurugram":         { lat: 28.46, lon: 77.03 },
+  // South India
+  "chennai":          { lat: 13.08, lon: 80.27 },
+  "bangalore":        { lat: 12.97, lon: 77.59 },
+  "bengaluru":        { lat: 12.97, lon: 77.59 },
+  "hyderabad":        { lat: 17.38, lon: 78.49 },
+  "kochi":            { lat: 9.93, lon: 76.27 },
+  "visakhapatnam":    { lat: 17.69, lon: 83.22 },
+  "bhubaneswar":      { lat: 20.30, lon: 85.84 },
+  // North India
+  "patna":            { lat: 25.59, lon: 85.14 },
+  "lucknow":          { lat: 26.85, lon: 80.95 },
+  "kanpur":           { lat: 26.45, lon: 80.33 },
+  "varanasi":         { lat: 25.32, lon: 82.97 },
+  "kolkata":          { lat: 22.57, lon: 88.36 },
+  "jaipur":           { lat: 26.91, lon: 75.79 },
+  "ahmedabad":        { lat: 23.02, lon: 72.57 },
+  "surat":            { lat: 21.17, lon: 72.83 },
+  "indore":           { lat: 22.72, lon: 75.86 },
+  "bhopal":           { lat: 23.26, lon: 77.41 },
+  "chandigarh":       { lat: 30.74, lon: 76.79 },
+  "amritsar":         { lat: 31.63, lon: 74.87 },
+  // Disaster-prone zones
+  "kedarnath":        { lat: 30.73, lon: 79.07 },
+  "uttarkashi":       { lat: 30.73, lon: 78.44 },
+  "leh":              { lat: 34.16, lon: 77.58 },
+  "srinagar":         { lat: 34.08, lon: 74.79 },
+};
+
+function getCoordsForZone(zone: any): {lat: number, lon: number} | null {
+  // 1. Explicit lat/lon fields (set by map click or Satellite Intel Agent)
+  if (zone.lat && zone.lon && (Math.abs(zone.lat) > 0.01 || Math.abs(zone.lon) > 0.01)) {
+    return { lat: zone.lat, lon: zone.lon };
+  }
+  // 2. Partial city name matching — handles "Kaziranga National Park, Assam" -> "kaziranga"
+  if (zone.location) {
+    const locLower = zone.location.toLowerCase();
+    // Check each known city key as a substring of the location string
+    for (const [cityKey, coords] of Object.entries(CITY_COORDS)) {
+      if (locLower.includes(cityKey)) {
+        return coords;
+      }
+    }
+  }
+  return null;
+}
+
+function getSeverityColor(Cesium: any, severity: number) {
+  if (severity >= 8) return Cesium.Color.fromCssColorString("#ef4444"); // red
+  if (severity >= 6) return Cesium.Color.fromCssColorString("#f97316"); // orange
+  if (severity >= 4) return Cesium.Color.fromCssColorString("#eab308"); // yellow
+  return Cesium.Color.fromCssColorString("#22c55e"); // green
 }
 
 const INDIA_CENTER: [number, number] = [22.5, 82.0];
 
-type LayerMode = "satellite" | "optical" | "sar";
-
-const MODULE_COLORS: Record<string, string> = {
-  flood:   "#38bdf8",
-  agri:    "#34d399",
-  urban:   "#fbbf24",
-  forest:  "#22c55e",
-  water:   "#22d3ee",
-  general: "#a78bfa",
-};
-
-export default function MapPanel({ imageUrl, geeTileUrl, bbox, centerLat, centerLon, module, stats, onDrawComplete }: MapPanelProps) {
+export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
-  const overlayRef = useRef<any>(null);
-  const baseLayerRef = useRef<any>(null);
-  const weatherLayerRef = useRef<any>(null);
-  const drawEntityRef = useRef<any>(null);
-  const drawHandlerRef = useRef<any>(null);
-
-  const [activeLayer, setActiveLayer] = useState<LayerMode>("satellite");
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [drawMode, setDrawMode] = useState(false);
-  const [overlayVisible, setOverlayVisible] = useState(true);
-  const [showLayers, setShowLayers] = useState(false);
-  const [showWeather, setShowWeather] = useState(false);
   const [cesiumReady, setCesiumReady] = useState(false);
-  const [drawnPoints, setDrawnPoints] = useState<any[]>([]);
+  const entitiesRef = useRef<{ [key: string]: any }>({});
+  const pendingEntitiesRef = useRef<{ [key: string]: any }>({});
+  const facilityEntitiesRef = useRef<any[]>([]);
+  const pendingFacilityEntitiesRef = useRef<any[]>([]);
 
+  // Wait for Cesium to load from CDN
   useEffect(() => {
+    console.log("Checking for Cesium readiness...");
     const checkCesium = setInterval(() => {
       if (typeof window !== 'undefined' && (window as any).Cesium) {
         setCesiumReady(true);
@@ -54,15 +107,17 @@ export default function MapPanel({ imageUrl, geeTileUrl, bbox, centerLat, center
     return () => clearInterval(checkCesium);
   }, []);
 
+  // Initialize Cesium Map
   useEffect(() => {
     if (!cesiumReady || !mapContainerRef.current || viewerRef.current) return;
-    
+
     const Cesium = (window as any).Cesium;
     Cesium.Ion.defaultAccessToken = "";
 
-    const arcGisProvider = new Cesium.UrlTemplateImageryProvider({
-      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      maximumLevel: 18
+    const osmProvider = new Cesium.UrlTemplateImageryProvider({
+      url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      subdomains: ["a", "b", "c"],
+      maximumLevel: 19
     });
 
     const viewer = new Cesium.Viewer(mapContainerRef.current, {
@@ -77,423 +132,477 @@ export default function MapPanel({ imageUrl, geeTileUrl, bbox, centerLat, center
       timeline: false,
       navigationHelpButton: false,
       navigationInstructionsInitiallyVisible: false,
-      baseLayer: new Cesium.ImageryLayer(arcGisProvider)
+      baseLayer: new Cesium.ImageryLayer(osmProvider)
     });
-    
-    // Enable completely free, high-quality 3D terrain via ArcGIS Terrain3D
-    Cesium.ArcGISTiledElevationTerrainProvider.fromUrl(
-      "https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer"
-    ).then((provider: any) => {
-      if (viewerRef.current) {
-        viewerRef.current.terrainProvider = provider;
-        viewerRef.current.scene.globe.depthTestAgainstTerrain = true;
-      }
-    }).catch((err: any) => {
-      console.error("Failed to load ArcGIS 3D Terrain", err);
-    });
-    
-    // Disable strict lighting so the map doesn't go pitch black at night
+
     viewer.scene.globe.enableLighting = false;
     viewer.scene.globe.showWaterEffect = true;
-    
-    if (viewer.scene.skyAtmosphere) {
-      viewer.scene.skyAtmosphere.hueShift = -0.05;
-    }
-    viewer.scene.fog.enabled = true;
-    viewer.scene.fog.density = 0.0001;
     viewer.cesiumWidget.creditContainer.style.display = "none";
 
     viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(INDIA_CENTER[1], INDIA_CENTER[0], 5000000.0)
+      destination: Cesium.Cartesian3.fromDegrees(INDIA_CENTER[1], INDIA_CENTER[0], 3500000.0)
     });
 
-    baseLayerRef.current = viewer.scene.imageryLayers.get(0);
+    // Map click handler
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    handler.setInputAction((click: any) => {
+      const ray = viewer.camera.getPickRay(click.position);
+      const position = viewer.scene.globe.pick(ray, viewer.scene);
+      if (position && onMapClick) {
+        const cartographic = Cesium.Cartographic.fromCartesian(position);
+        const lon = Cesium.Math.toDegrees(cartographic.longitude);
+        const lat = Cesium.Math.toDegrees(cartographic.latitude);
+        onMapClick({ lat, lon });
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
     viewerRef.current = viewer;
 
-    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-    handler.setInputAction((movement: any) => {
-      const cartesian = viewer.camera.pickEllipsoid(movement.endPosition, viewer.scene.globe.ellipsoid);
-      if (cartesian) {
-        const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
-        const lat = parseFloat(Cesium.Math.toDegrees(cartographic.latitude).toFixed(4));
-        const lng = parseFloat(Cesium.Math.toDegrees(cartographic.longitude).toFixed(4));
-        
-        // Directly update the DOM instead of causing React state re-renders 60 times a second
-        const coordsEl = document.getElementById("coords-display");
-        if (coordsEl) {
-          coordsEl.innerText = `${lat}°N ${lng}°E`;
-        }
-      }
-    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
-
     return () => {
-      handler.destroy();
       viewer.destroy();
       viewerRef.current = null;
     };
   }, [cesiumReady]);
 
-  useEffect(() => {
+  // Function to render zones onto Cesium map
+  const renderZones = (zonesDict: Record<string, any>) => {
     if (!viewerRef.current || !cesiumReady) return;
     const Cesium = (window as any).Cesium;
     const viewer = viewerRef.current;
 
-    const applyLayer = (provider: any) => {
-      const layers = viewer.scene.imageryLayers;
-      if (baseLayerRef.current) {
-        layers.remove(baseLayerRef.current);
+    // zones from backend is a dict: { "Zone A": {...}, "Zone B": {...} }
+    const zones = Object.values(zonesDict);
+    const currentIds = new Set(zones.map((z: any) => z.zone_id));
+
+    // Remove stale entities
+    Object.keys(entitiesRef.current).forEach(id => {
+      if (!currentIds.has(id)) {
+        viewer.entities.remove(entitiesRef.current[id]);
+        delete entitiesRef.current[id];
       }
-      baseLayerRef.current = layers.addImageryProvider(provider, 0);
-    };
-
-    if (activeLayer === "satellite") {
-      applyLayer(new Cesium.UrlTemplateImageryProvider({
-        url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        maximumLevel: 18
-      }));
-    } else {
-      fetch(`http://localhost:8000/api/basemap?layer_type=${activeLayer}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.url) {
-            applyLayer(new Cesium.UrlTemplateImageryProvider({
-              url: data.url,
-              maximumLevel: 18
-            }));
-          }
-        })
-        .catch(console.error);
-    }
-  }, [activeLayer, cesiumReady]);
-
-  useEffect(() => {
-    if (!viewerRef.current || !cesiumReady) return;
-    const Cesium = (window as any).Cesium;
-    const viewer = viewerRef.current;
-
-    if (showWeather) {
-      fetch("https://api.rainviewer.com/public/weather-maps.json")
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.radar && data.radar.past && data.radar.past.length > 0) {
-            const latestTime = data.radar.past[data.radar.past.length - 1].time;
-            const weatherProvider = new Cesium.UrlTemplateImageryProvider({
-              url: `https://tilecache.rainviewer.com/v2/radar/${latestTime}/256/{z}/{x}/{y}/2/1_1.png`,
-              maximumLevel: 12
-            });
-            weatherLayerRef.current = viewer.scene.imageryLayers.addImageryProvider(weatherProvider);
-            weatherLayerRef.current.alpha = 0.65;
-          }
-        })
-        .catch(console.error);
-    } else {
-      if (weatherLayerRef.current) {
-        viewer.scene.imageryLayers.remove(weatherLayerRef.current);
-        weatherLayerRef.current = null;
-      }
-    }
-  }, [showWeather, cesiumReady]);
-
-  // Effect to fly to the bounding box
-  useEffect(() => {
-    if (!viewerRef.current || !cesiumReady || !bbox) return;
-    const Cesium = (window as any).Cesium;
-    const viewer = viewerRef.current;
-    
-    const [minLon, minLat, maxLon, maxLat] = bbox;
-    viewer.camera.flyTo({
-      destination: Cesium.Rectangle.fromDegrees(minLon, minLat, maxLon, maxLat),
-      duration: 1.5
-    });
-  }, [bbox, cesiumReady]);
-
-  // Effect to apply the GEE Tile overlay (if available)
-  useEffect(() => {
-    if (!viewerRef.current || !cesiumReady || !geeTileUrl) return;
-    const Cesium = (window as any).Cesium;
-    const viewer = viewerRef.current;
-
-    if (overlayRef.current) {
-      viewer.scene.imageryLayers.remove(overlayRef.current);
-      overlayRef.current = null;
-    }
-
-    const provider = new Cesium.UrlTemplateImageryProvider({
-      url: geeTileUrl,
-      maximumLevel: 18
     });
 
-    overlayRef.current = viewer.scene.imageryLayers.addImageryProvider(provider);
-    overlayRef.current.alpha = overlayVisible ? 0.85 : 0.0;
-  }, [geeTileUrl, cesiumReady, overlayVisible]);
+    // Remove old facility markers to redraw
+    facilityEntitiesRef.current.forEach(e => viewer.entities.remove(e));
+    facilityEntitiesRef.current = [];
 
-  const toggleOverlay = useCallback(() => {
-    if (overlayRef.current) {
-      overlayRef.current.alpha = overlayVisible ? 0.0 : 0.85;
-      setOverlayVisible(!overlayVisible);
-    }
-  }, [overlayVisible]);
+    // Add or update entities
+    zones.forEach((zone: any) => {
+      const coords = getCoordsForZone(zone);
+      if (!coords) return; // can't plot without coordinates
 
-  const toggleDraw = useCallback(() => {
-    if (!viewerRef.current || !cesiumReady) return;
-    const Cesium = (window as any).Cesium;
-    const viewer = viewerRef.current;
+      const severity = zone.severity_final ?? zone.severity_reported ?? 5;
+      const color = getSeverityColor(Cesium, severity);
+      const radiusMeters = zone.gee_area_km2
+        ? Math.sqrt(zone.gee_area_km2 / Math.PI) * 1000
+        : 15000; // default 15km radius
 
-    if (!drawMode) {
-      setDrawMode(true);
-      const points: any[] = [];
-      const drawHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-      drawHandlerRef.current = drawHandler;
+      const labelText = `${zone.zone_id}\n${zone.location}\nSeverity: ${severity}/10`;
 
-      drawHandler.setInputAction((click: any) => {
-        const cartesian = viewer.camera.pickEllipsoid(click.position, viewer.scene.globe.ellipsoid);
-        if (cartesian) {
-          points.push(cartesian);
-          
-          if (!drawEntityRef.current) {
-            drawEntityRef.current = viewer.entities.add({
-              polygon: {
-                hierarchy: new Cesium.CallbackProperty(() => new Cesium.PolygonHierarchy(points), false),
-                material: Cesium.Color.fromCssColorString(MODULE_COLORS[module || "general"] || "#38bdf8").withAlpha(0.3),
-                outline: true,
-                outlineColor: Cesium.Color.fromCssColorString(MODULE_COLORS[module || "general"] || "#38bdf8")
-              }
-            });
-          }
-          setDrawnPoints([...points]);
-        }
-      }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-
-    } else {
-      setDrawMode(false);
-      if (drawHandlerRef.current) {
-        drawHandlerRef.current.destroy();
-        drawHandlerRef.current = null;
-      }
-      
-      if (drawnPoints.length > 2) {
-        const coordsList = drawnPoints.map(pt => {
-          const carto = Cesium.Cartographic.fromCartesian(pt);
-          return [Cesium.Math.toDegrees(carto.longitude), Cesium.Math.toDegrees(carto.latitude)];
-        });
-        coordsList.push(coordsList[0]);
-
-        const geojson = {
-          type: "Feature",
-          properties: {},
-          geometry: {
-            type: "Polygon",
-            coordinates: [coordsList]
+      if (!entitiesRef.current[zone.zone_id]) {
+        const entityConfig: any = {
+          position: Cesium.Cartesian3.fromDegrees(coords.lon, coords.lat),
+          point: {
+            pixelSize: 12,
+            color: Cesium.Color.WHITE,
+            outlineColor: color,
+            outlineWidth: 3,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: labelText,
+            font: 'bold 12pt sans-serif',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 3,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -18),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            showBackground: false
           }
         };
-        if (onDrawComplete) onDrawComplete(geojson);
-      } else {
-        if (drawEntityRef.current) {
-          viewer.entities.remove(drawEntityRef.current);
-          drawEntityRef.current = null;
+        
+        if (zone.geojson && zone.geojson.features && zone.geojson.features[0].geometry.coordinates) {
+          try {
+            const coordsList = zone.geojson.features[0].geometry.coordinates[0];
+            const flatCoords = coordsList.flat();
+            entityConfig.polygon = {
+              hierarchy: Cesium.Cartesian3.fromDegreesArray(flatCoords),
+              material: color.withAlpha(0.35),
+              outline: true,
+              outlineColor: color,
+              outlineWidth: 3,
+            };
+          } catch (e) {
+            console.error("GeoJSON parse error", e);
+          }
+        } else {
+          entityConfig.ellipse = {
+            semiMinorAxis: radiusMeters,
+            semiMajorAxis: radiusMeters,
+            material: color.withAlpha(0.18),
+            outline: true,
+            outlineColor: color,
+            outlineWidth: 2,
+          };
         }
-        if (onDrawComplete) onDrawComplete(null);
-      }
-    }
-  }, [drawMode, cesiumReady, drawnPoints, module, onDrawComplete]);
 
-  const resetMap = useCallback(() => {
-    if (viewerRef.current && drawEntityRef.current) {
-      viewerRef.current.entities.remove(drawEntityRef.current);
-      drawEntityRef.current = null;
-    }
-    if (drawHandlerRef.current) {
-      drawHandlerRef.current.destroy();
-      drawHandlerRef.current = null;
-    }
-    setDrawMode(false);
-    setDrawnPoints([]);
-    if (onDrawComplete) onDrawComplete(null);
-  }, [onDrawComplete]);
+        const entity = viewer.entities.add(entityConfig);
+        entitiesRef.current[zone.zone_id] = entity;
+      } else {
+        // Update existing entity
+        const entity = entitiesRef.current[zone.zone_id];
+        entity.point.outlineColor = color;
+        entity.label.text = labelText;
+        entity.label.fillColor = Cesium.Color.WHITE;
+        entity.label.outlineColor = Cesium.Color.BLACK;
+        entity.label.outlineWidth = 3;
+        entity.label.showBackground = false;
+        
+        if (zone.geojson && zone.geojson.features && zone.geojson.features[0].geometry.coordinates) {
+          try {
+            const coordsList = zone.geojson.features[0].geometry.coordinates[0];
+            const flatCoords = coordsList.flat();
+            
+            // If it was an ellipse before, remove the ellipse
+            if (entity.ellipse) {
+              entity.ellipse = undefined;
+            }
+            
+            if (entity.polygon) {
+              entity.polygon.hierarchy = new Cesium.ConstantProperty(new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(flatCoords)));
+              entity.polygon.material = color.withAlpha(0.35);
+              entity.polygon.outlineColor = color;
+            } else {
+              entity.polygon = new Cesium.PolygonGraphics({
+                hierarchy: Cesium.Cartesian3.fromDegreesArray(flatCoords),
+                material: color.withAlpha(0.35),
+                outline: true,
+                outlineColor: color,
+                outlineWidth: 3,
+              });
+            }
+          } catch (err) {
+             console.error(err);
+          }
+        } else {
+          // If no geojson, ensure ellipse exists and polygon is removed
+          if (entity.polygon) {
+            entity.polygon = undefined;
+          }
+          if (entity.ellipse) {
+            entity.ellipse.material = color.withAlpha(0.35);
+            entity.ellipse.outlineColor = color;
+          } else {
+            entity.ellipse = new Cesium.EllipseGraphics({
+              semiMinorAxis: radiusMeters,
+              semiMajorAxis: radiusMeters,
+              material: color.withAlpha(0.35),
+              outline: true,
+              outlineColor: color,
+              outlineWidth: 2,
+            });
+          }
+        }
+        if (entity.ellipse) {
+          entity.ellipse.semiMinorAxis = radiusMeters;
+          entity.ellipse.semiMajorAxis = radiusMeters;
+        }
+      }
+    });
+
+    // Draw facility markers for all zones that have them
+    zones.forEach((zone: any) => {
+      const facilities = zone.nearest_facilities || [];
+      if (!facilities.length) return;
+      const zoneCoords = getCoordsForZone(zone);
+      if (!zoneCoords) return;
+
+      facilities.forEach((f: any) => {
+        try {
+          const fColor = Cesium.Color.fromCssColorString(f.color || '#38bdf8');
+          const etaText = f.eta_minutes < 60 ? `${f.eta_minutes}min` : `${(f.eta_minutes/60).toFixed(1)}h`;
+          const iconChar = f.icon === 'hospital' ? '🏥' : f.icon === 'military' ? '⚔' : f.icon === 'fire' ? '🚒' : '🍱';
+
+          // Facility pin
+          const pin = viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat),
+            point: {
+              pixelSize: 8,
+              color: fColor,
+              outlineColor: Cesium.Color.WHITE,
+              outlineWidth: 1,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            label: {
+              text: `${f.name}\n${f.type} · ${etaText} ETA`,
+              font: '9pt sans-serif',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              fillColor: Cesium.Color.WHITE,
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -12),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              showBackground: true,
+              backgroundColor: fColor.withAlpha(0.75),
+              backgroundPadding: new Cesium.Cartesian2(4, 2),
+              show: false, // only show on hover; always show pin
+            },
+            // Draw a line from zone center to this facility
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray([
+                zoneCoords.lon, zoneCoords.lat,
+                f.lon, f.lat
+              ]),
+              width: 1.5,
+              material: new Cesium.ColorMaterialProperty(fColor.withAlpha(0.4)),
+              clampToGround: false,
+            }
+          });
+          facilityEntitiesRef.current.push(pin);
+        } catch (e) {
+          // Skip bad facility coords
+        }
+      });
+    });
+  };
+
+  // Render pending zones (admin only) — shown as yellow dashed circles with ⏳ label
+  const renderPendingZones = (pendingDict: Record<string, any>) => {
+    if (!viewerRef.current || !cesiumReady) return;
+    const Cesium = (window as any).Cesium;
+    const viewer = viewerRef.current;
+
+    const pending = Object.values(pendingDict);
+    const currentIds = new Set(pending.map((z: any) => z.zone_id));
+
+    // Remove stale pending markers
+    Object.keys(pendingEntitiesRef.current).forEach(id => {
+      if (!currentIds.has(id)) {
+        viewer.entities.remove(pendingEntitiesRef.current[id]);
+        delete pendingEntitiesRef.current[id];
+      }
+    });
+
+    pending.forEach((zone: any) => {
+      if (pendingEntitiesRef.current[zone.zone_id]) return; // already drawn
+      const coords = getCoordsForZone(zone);
+      if (!coords) return;
+
+      const severity = zone.severity_final ?? zone.severity_reported ?? 5;
+      const radiusMeters = zone.gee_area_km2
+        ? Math.sqrt(zone.gee_area_km2 / Math.PI) * 1000
+        : 15000;
+
+      const entity = viewer.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(coords.lon, coords.lat),
+        point: {
+          pixelSize: 10,
+          color: Cesium.Color.YELLOW.withAlpha(0.9),
+          outlineColor: Cesium.Color.fromCssColorString('#facc15'),
+          outlineWidth: 2,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          text: `⏳ PENDING\n${zone.zone_id}\n${zone.location}\nSeverity: ${severity}/10`,
+          font: 'bold 11pt sans-serif',
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          fillColor: Cesium.Color.fromCssColorString('#facc15'),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 3,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -18),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          showBackground: true,
+          backgroundColor: Cesium.Color.fromCssColorString('#1a1a00').withAlpha(0.75),
+          backgroundPadding: new Cesium.Cartesian2(6, 3),
+        },
+        ellipse: {
+          semiMinorAxis: radiusMeters,
+          semiMajorAxis: radiusMeters,
+          material: Cesium.Color.fromCssColorString('#facc15').withAlpha(0.12),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString('#facc15').withAlpha(0.7),
+          outlineWidth: 2,
+        }
+      });
+      pendingEntitiesRef.current[zone.zone_id] = entity;
+    });
+
+    // Draw facility markers for pending zones
+    pendingFacilityEntitiesRef.current.forEach(e => viewer.entities.remove(e));
+    pendingFacilityEntitiesRef.current = [];
+
+    pending.forEach((zone: any) => {
+      const facilities = zone.nearest_facilities || [];
+      if (!facilities.length) return;
+      const zoneCoords = getCoordsForZone(zone);
+      if (!zoneCoords) return;
+
+      facilities.forEach((f: any) => {
+        try {
+          const fColor = Cesium.Color.fromCssColorString(f.color || '#38bdf8');
+          const etaText = f.eta_minutes < 60 ? `${f.eta_minutes}min` : `${(f.eta_minutes/60).toFixed(1)}h`;
+          const iconChar = f.icon === 'hospital' ? '🏥' : f.icon === 'military' ? '⚔' : f.icon === 'fire' ? '🚒' : '🍱';
+
+          const pin = viewer.entities.add({
+            position: Cesium.Cartesian3.fromDegrees(f.lon, f.lat),
+            point: {
+              pixelSize: 8,
+              color: fColor,
+              outlineColor: Cesium.Color.WHITE,
+              outlineWidth: 1,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            label: {
+              text: `${f.name}\n${f.type} · ${etaText} ETA`,
+              font: '9pt sans-serif',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              fillColor: Cesium.Color.WHITE,
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -12),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              showBackground: true,
+              backgroundColor: fColor.withAlpha(0.75),
+              backgroundPadding: new Cesium.Cartesian2(4, 2),
+              show: false, // only show on hover
+            },
+            polyline: {
+              positions: Cesium.Cartesian3.fromDegreesArray([
+                zoneCoords.lon, zoneCoords.lat,
+                f.lon, f.lat
+              ]),
+              width: 1.5,
+              material: new Cesium.ColorMaterialProperty(fColor.withAlpha(0.4)),
+              clampToGround: false,
+            }
+          });
+          pendingFacilityEntitiesRef.current.push(pin);
+        } catch (e) { }
+      });
+    });
+  };
+
+  // Poll REST on load AND listen to WebSocket for updates
+  useEffect(() => {
+    if (!cesiumReady) return;
+
+    const fetchAll = () => {
+      // Always fetch active zones
+      fetch(`${apiBase}/api/zones`)
+        .then(r => r.json())
+        .then(zones => renderZones(zones))
+        .catch(() => {});
+
+      // Admin: also fetch and render pending zones
+      if (isAdmin) {
+        fetch(`${apiBase}/api/zones/pending`)
+          .then(r => r.json())
+          .then(pending => renderPendingZones(pending))
+          .catch(() => {});
+      }
+    };
+
+    fetchAll();
+
+    // WebSocket for live updates
+    const wsUrl = apiBase.replace(/^http/, "ws") + "/api/ws";
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "state_update") {
+          if (data.zones) renderZones(data.zones);
+          if (isAdmin && data.pending_zones) renderPendingZones(data.pending_zones);
+        }
+      } catch (err) {
+        console.error("MapPanel WS parse error:", err);
+      }
+    };
+
+    ws.onerror = () => {};
+
+    // Fallback polling every 4 seconds
+    const pollInterval = setInterval(fetchAll, 4000);
+
+    return () => {
+      ws.close();
+      clearInterval(pollInterval);
+    };
+  }, [cesiumReady, apiBase, isAdmin]);
+
+  // Listen for flyToZone events from CommandDashboard
+  useEffect(() => {
+    const handleFlyTo = (e: any) => {
+      const viewer = viewerRef.current;
+      if (!viewer) return;
+      const { lat, lon } = e.detail;
+      const Cesium = (window as any).Cesium;
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(lon, lat, 2500.0), // 2500m height for street level
+        duration: 2.0
+      });
+    };
+    
+    window.addEventListener('flyToZone', handleFlyTo);
+    return () => window.removeEventListener('flyToZone', handleFlyTo);
+  }, []);
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%", background: "#000" }}>
-      <div ref={mapContainerRef} style={{ width: "100%", height: "100%", cursor: "grab" }} />
-
-      {!cesiumReady && (
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-2)", background: "rgba(0,0,0,0.8)", zIndex: 1000 }}>
-          Initializing 3D Globe...
-        </div>
-      )}
-
-      {/* --- Zoom Controls (Bottom Left, next to layers) --- */}
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <div ref={mapContainerRef} style={{ width: "100%", height: "100%" }} />
       <div style={{
-        position: "absolute", bottom: 40, left: 60, zIndex: 10,
-        display: "flex", alignItems: "center", background: "var(--bg-panel)", 
-        borderRadius: 20, border: "1px solid var(--border-mid)", 
-        backdropFilter: "blur(16px)", overflow: "hidden", boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
-        pointerEvents: "all"
+        position: "absolute",
+        top: 0, left: 0, width: "100%", height: "100%",
+        background: "rgba(0,0,0,0.35)",
+        pointerEvents: "none"
+      }} />
+      
+      {/* Zoom Controls */}
+      <div style={{
+        position: "absolute",
+        bottom: 60,
+        right: 350,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+        zIndex: 10
       }}>
         <button 
-          title="Zoom Out" 
-          style={{ background: "transparent", border: "none", color: "var(--text-1)", padding: "6px 14px", fontSize: 20, cursor: "pointer", transition: "0.2s" }}
-          onMouseOver={(e) => e.currentTarget.style.background = "var(--bg-hover)"}
-          onMouseOut={(e) => e.currentTarget.style.background = "transparent"}
           onClick={() => {
-            const Cesium = (window as any).Cesium;
-            const cam = viewerRef.current?.camera;
-            if (cam && Cesium) {
-              const carto = Cesium.Cartographic.fromCartesian(cam.position);
-              carto.height = Math.min(carto.height * 2.0, 20000000);
-              cam.flyTo({ destination: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height), duration: 0.5 });
+            if (viewerRef.current) {
+              const viewer = viewerRef.current;
+              // Zoom in by taking camera closer to its current target
+              viewer.camera.moveForward(viewer.camera.positionCartographic.height * 0.4);
             }
           }}
-        >−</button>
-        <div style={{ width: 1, height: 20, background: "var(--border-mid)" }} />
+          style={{
+            width: 40, height: 40, borderRadius: 8, background: "var(--bg-deep)", border: "1px solid var(--border)", 
+            color: "var(--text-1)", fontSize: 24, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 6px rgba(0,0,0,0.3)"
+          }}
+        >
+          +
+        </button>
         <button 
-          title="Zoom In" 
-          style={{ background: "transparent", border: "none", color: "var(--text-1)", padding: "6px 14px", fontSize: 20, cursor: "pointer", transition: "0.2s" }}
-          onMouseOver={(e) => e.currentTarget.style.background = "var(--bg-hover)"}
-          onMouseOut={(e) => e.currentTarget.style.background = "transparent"}
           onClick={() => {
-            const Cesium = (window as any).Cesium;
-            const cam = viewerRef.current?.camera;
-            if (cam && Cesium) {
-              const carto = Cesium.Cartographic.fromCartesian(cam.position);
-              carto.height = Math.max(carto.height * 0.5, 100);
-              cam.flyTo({ destination: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height), duration: 0.5 });
+            if (viewerRef.current) {
+              const viewer = viewerRef.current;
+              // Zoom out
+              viewer.camera.moveBackward(viewer.camera.positionCartographic.height * 0.4);
             }
           }}
-        >+</button>
-      </div>
-
-      <div style={{ position: "absolute", top: 16, left: 0, right: 0, display: "flex", flexDirection: "column", alignItems: "center", pointerEvents: "none", zIndex: 10 }}>
-        <div style={{
-          display: "flex", gap: 4,
-          background: "var(--bg-panel)",
-          border: "1px solid var(--border-mid)",
-          borderRadius: 10, padding: "5px 7px",
-          backdropFilter: "blur(16px)",
-          pointerEvents: "all",
-        }}>
-          {[
-            { label: "True Color", key: "TC" },
-            { label: "False Color", key: "FC" },
-            { label: "NDVI", key: "NDVI" },
-            { label: "SAR VV", key: "SAR" },
-            { label: "Urban", key: "URB" },
-          ].map((tab) => (
-            <button key={tab.key} className={`asset-tab ${tab.key === (module === "flood" ? "SAR" : module === "agri" ? "NDVI" : "TC") ? "active" : ""}`}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--text-3)" }} />
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {stats && (
-          <div style={{ display: "flex", gap: 8, marginTop: 12, pointerEvents: "all" }}>
-            {stats.cloud !== undefined && (
-              <div className="stat-card">
-                <div className="stat-label">CLOUD %</div>
-                <div className="stat-value">{stats.cloud}%</div>
-              </div>
-            )}
-            {stats.area !== undefined && (
-              <div className="stat-card" style={{ borderColor: MODULE_COLORS.flood }}>
-                <div className="stat-label">AREA KM²</div>
-                <div className="stat-value" style={{ color: MODULE_COLORS.flood }}>
-                  {stats.area.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </div>
-              </div>
-            )}
-            {stats.ndvi !== undefined && (
-              <div className="stat-card" style={{ borderColor: MODULE_COLORS.agri }}>
-                <div className="stat-label">AVG NDVI</div>
-                <div className="stat-value" style={{ color: MODULE_COLORS.agri }}>
-                  {stats.ndvi.toFixed(3)}
-                </div>
-              </div>
-            )}
-            {stats.sensor && (
-              <div className="stat-card">
-                <div className="stat-label">SENSOR</div>
-                <div className="stat-value" style={{ fontSize: 13, color: "var(--text-2)" }}>{stats.sensor}</div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div style={{ position: "absolute", bottom: 40, left: 12, zIndex: 10, display: "flex", flexDirection: "column", gap: 8 }}>
-        <button className={`map-tool ${showWeather ? "active" : ""}`} onClick={() => setShowWeather(!showWeather)} title="Live Weather Radar" style={{ borderRadius: "50%", padding: 10, color: showWeather ? "#38bdf8" : undefined }}>
-          <CloudRain size={18} />
+          style={{
+            width: 40, height: 40, borderRadius: 8, background: "var(--bg-deep)", border: "1px solid var(--border)", 
+            color: "var(--text-1)", fontSize: 24, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 4px 6px rgba(0,0,0,0.3)"
+          }}
+        >
+          -
         </button>
-        <button className={`map-tool ${showLayers ? "active" : ""}`} onClick={() => setShowLayers(!showLayers)} title="Basemap settings" style={{ borderRadius: "50%", padding: 10 }}>
-          <Layers size={18} />
-        </button>
-        
-        {showLayers && (
-          <div className="fade-up" style={{
-            position: "absolute", bottom: 0, left: 45,
-            background: "var(--bg-panel)",
-            border: "1px solid var(--border-mid)",
-            borderRadius: 8, padding: 8, width: 220,
-            backdropFilter: "blur(16px)",
-            display: "flex", flexDirection: "column", gap: 4
-          }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-3)", padding: "4px 8px", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Basemap Type</div>
-            {[
-              { id: "satellite", icon: <ImageIcon size={16} />, label: "Map (Standard)" },
-              { id: "optical", icon: <ImageIcon size={16} />, label: "Optical (Sentinel-2)" },
-              { id: "sar", icon: <Layers size={16} />, label: "SAR (Sentinel-1 VV)" }
-            ].map(layer => (
-              <button
-                key={layer.id}
-                onClick={() => { setActiveLayer(layer.id as LayerMode); setShowLayers(false); }}
-                style={{
-                  display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
-                  background: activeLayer === layer.id ? "var(--bg-hover)" : "transparent",
-                  color: activeLayer === layer.id ? "var(--text-1)" : "var(--text-2)",
-                  border: "none", borderRadius: 6, cursor: "pointer",
-                  textAlign: "left", fontSize: 13, transition: "all 0.2s"
-                }}
-              >
-                {layer.icon}
-                <span style={{ fontWeight: activeLayer === layer.id ? 500 : 400 }}>{layer.label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div style={{
-        position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
-        display: "flex", flexDirection: "column", gap: 8, zIndex: 10
-      }}>
-        <div style={{ display: "flex", flexDirection: "column", background: "var(--bg-panel)", borderRadius: 8, border: "1px solid var(--border-mid)", backdropFilter: "blur(16px)", overflow: "hidden" }}>
-          <button className={`map-tool ${drawMode ? "active" : ""}`} onClick={toggleDraw} title={drawMode ? "Finish Drawing" : "Draw Region"}>
-            <Pencil size={18} />
-          </button>
-          {drawEntityRef.current && (
-            <>
-              <div style={{ height: 1, background: "var(--border-mid)" }} />
-              <button className="map-tool" onClick={resetMap} title="Reset Region">
-                <RotateCcw size={18} />
-              </button>
-            </>
-          )}
-        </div>
-
-        {geeTileUrl && (
-          <div style={{ display: "flex", flexDirection: "column", background: "var(--bg-panel)", borderRadius: 8, border: "1px solid var(--border-mid)", backdropFilter: "blur(16px)", overflow: "hidden", marginTop: 8 }}>
-             <button className={`map-tool ${overlayVisible ? "active" : ""}`} onClick={toggleOverlay} title="Toggle Analysis Overlay">
-              <Eye size={18} />
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div style={{
-        position: "absolute", bottom: 8, left: 12, zIndex: 10,
-        fontSize: 10, color: "var(--text-3)", fontFamily: "monospace", display: "flex", gap: 16
-      }}>
-        <span id="coords-display">Tracking...</span>
-        <span>EPSG:4326 · WGS84</span>
       </div>
     </div>
   );

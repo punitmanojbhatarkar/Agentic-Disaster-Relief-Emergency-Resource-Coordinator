@@ -119,7 +119,7 @@ export default function ChatPanel({ onImageUpdate, onStatsUpdate, geojson }: {
     } catch {
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(), role: "ai",
-        content: "⚠️ Connection error. Please ensure the backend is running on port 8000.",
+        content: "⚠️ Connection error. Please ensure the backend is running on port 8005.",
       }]);
     } finally {
       setLoading(false);
@@ -362,7 +362,7 @@ function downloadPDF(content: string, data?: ChatResponse) {
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.*?)\*/g, '<em>$1</em>')
     .replace(/^- (.*)/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
+    .replace(/(<li>[\s\S]*<\/li>)/g, '<ul>$1</ul>')
     .replace(/\n\n/g, '</p><p>')
     .replace(/^(?!<[hul])/gm, '');
 

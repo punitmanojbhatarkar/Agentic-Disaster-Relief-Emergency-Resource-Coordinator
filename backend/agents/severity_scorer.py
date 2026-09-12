@@ -1,7 +1,15 @@
 import datetime
+import math
 from backend.models.zone import ZoneReport
-from backend.main import HISTORICAL_FLOOD_RECORDS
 from backend.store.state import state
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371  # Earth radius in km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
 
 def score_zone(zone: ZoneReport) -> ZoneReport:
     """
@@ -20,6 +28,7 @@ def score_zone(zone: ZoneReport) -> ZoneReport:
             exposure_factor = zone.gee_area_km2 * (zone.population / zone.zone_area_km2)
             gee_score = min(10.0, (exposure_factor / 100000.0) * 10)
         else:
+            from backend.main import HISTORICAL_FLOOD_RECORDS
             location_key = zone.location.lower()
             if "," in location_key:
                 location_key = location_key.split(",")[-1].strip()
@@ -50,7 +59,34 @@ def score_zone(zone: ZoneReport) -> ZoneReport:
             "zone_id": zone.zone_id,
             "description": f"Boosted severity from {raw_severity_final-1.5:.1f} to {raw_severity_final:.1f}."
         })
-        zone.cycles_unfulfilled = 0 # reset after applying boost? Or keep it? Let's leave it for now.
+        zone.cycles_unfulfilled = 0
+
+    # Proximity / Cluster Prioritization Logic
+    if zone.lat and zone.lon:
+        cluster_boost = 0.0
+        for other_zone in state.zones.values():
+            if other_zone.get("status") != "active" or other_zone.get("zone_id") == zone.zone_id:
+                continue
+            olat, olon = other_zone.get("lat"), other_zone.get("lon")
+            if olat and olon:
+                dist = haversine(zone.lat, zone.lon, olat, olon)
+                if dist < 50.0:
+                    other_sev = other_zone.get("severity_final", 0)
+                    if other_sev >= 8.0:
+                        cluster_boost = max(cluster_boost, 1.0)
+                    elif other_sev >= 5.0:
+                        cluster_boost = max(cluster_boost, 0.5)
+        
+        if cluster_boost > 0:
+            raw_severity_final += cluster_boost
+            reasoning += f" Applied cluster boost (+{cluster_boost}) due to nearby active incidents (<50km)."
+            state.audit_log.append({
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "agent": "SeverityScorer",
+                "event_type": "proximity_prioritization",
+                "zone_id": zone.zone_id,
+                "description": f"Incident clustered with nearby zones. Boosted priority by +{cluster_boost}."
+            })
 
     zone.severity_final = min(10.0, round(raw_severity_final, 2))
     
