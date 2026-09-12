@@ -35,6 +35,12 @@ def poll_gdacs():
                 
                 # Check if we already have this zone by matching location
                 location = entry.get('gdacs_country', entry.title)
+                
+                # HACKATHON FILTER: Only allow Indian events automatically, 
+                # as our resources and facilities are Indian.
+                if location and 'india' not in location.lower():
+                    continue
+
                 event_type = entry.get('gdacs_eventtype', 'Disaster')
                 
                 zone_id = f"GDACS-{str(uuid.uuid4())[:6]}"
