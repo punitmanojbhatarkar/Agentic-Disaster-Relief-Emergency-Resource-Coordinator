@@ -1390,6 +1390,14 @@ def citizen_status(phone: str):
                 eta_text = f"{eta_minutes} minutes"
             else:
                 eta_text = f"{eta_minutes // 60}h {eta_minutes % 60}m"
+    
+    # Fallback ETA for the demo if exact facilities aren't mapped yet
+    if not eta_text:
+        fallback_eta = int(30 + (severity * 5)) # e.g., severity 6 = 60 mins
+        if fallback_eta < 60:
+            eta_text = f"{fallback_eta} minutes"
+        else:
+            eta_text = f"{fallback_eta // 60}h {fallback_eta % 60}m"
 
     if is_pending:
         status_code = "PENDING_REVIEW"
