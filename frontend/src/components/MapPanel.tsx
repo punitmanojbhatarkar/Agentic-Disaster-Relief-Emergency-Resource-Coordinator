@@ -336,7 +336,7 @@ export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
             label: {
-              text: `${f.name}\n${f.type} · ${etaText} ETA`,
+              text: `${f.name}\n${f.type} · ${f.dist_km ? f.dist_km.toFixed(1) : '?'} km · ${etaText} ETA`,
               font: '9pt sans-serif',
               style: Cesium.LabelStyle.FILL_AND_OUTLINE,
               fillColor: Cesium.Color.WHITE,
@@ -348,16 +348,19 @@ export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps
               showBackground: true,
               backgroundColor: fColor.withAlpha(0.75),
               backgroundPadding: new Cesium.Cartesian2(4, 2),
-              show: false, // only show on hover; always show pin
+              show: true, 
             },
-            // Draw a line from zone center to this facility
+            // Draw a dashed line from zone center to this facility
             polyline: {
               positions: Cesium.Cartesian3.fromDegreesArray([
                 zoneCoords.lon, zoneCoords.lat,
                 f.lon, f.lat
               ]),
-              width: 1.5,
-              material: new Cesium.ColorMaterialProperty(fColor.withAlpha(0.4)),
+              width: 2.5,
+              material: new Cesium.PolylineDashMaterialProperty({
+                color: fColor.withAlpha(0.8),
+                dashLength: 15.0
+              }),
               clampToGround: false,
             }
           });
@@ -457,7 +460,7 @@ export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps
               disableDepthTestDistance: Number.POSITIVE_INFINITY,
             },
             label: {
-              text: `${f.name}\n${f.type} · ${etaText} ETA`,
+              text: `${f.name}\n${f.type} · ${f.dist_km ? f.dist_km.toFixed(1) : '?'} km · ${etaText} ETA`,
               font: '9pt sans-serif',
               style: Cesium.LabelStyle.FILL_AND_OUTLINE,
               fillColor: Cesium.Color.WHITE,
@@ -469,15 +472,18 @@ export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps
               showBackground: true,
               backgroundColor: fColor.withAlpha(0.75),
               backgroundPadding: new Cesium.Cartesian2(4, 2),
-              show: false, // only show on hover
+              show: true, 
             },
             polyline: {
               positions: Cesium.Cartesian3.fromDegreesArray([
                 zoneCoords.lon, zoneCoords.lat,
                 f.lon, f.lat
               ]),
-              width: 1.5,
-              material: new Cesium.ColorMaterialProperty(fColor.withAlpha(0.4)),
+              width: 2.5,
+              material: new Cesium.PolylineDashMaterialProperty({
+                color: fColor.withAlpha(0.8),
+                dashLength: 15.0
+              }),
               clampToGround: false,
             }
           });
