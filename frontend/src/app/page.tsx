@@ -150,18 +150,24 @@ export default function HomePage() {
       }}>
         {/* Logo */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 6,
-            background: "var(--sev-9)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <Shield size={16} color="#ffffff" />
+          {/* Professional badge — layered emerald glow */}
+          <div style={{ position: 'relative', width: 34, height: 34, flexShrink: 0 }}>
+            <div style={{
+              position: 'absolute', inset: 0, borderRadius: 8,
+              background: 'linear-gradient(135deg, #1a4731 0%, #276749 60%, #2f855a 100%)',
+              boxShadow: '0 0 0 1px rgba(39,103,73,0.6), 0 0 12px rgba(39,103,73,0.35)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Shield size={17} color="#86efac" strokeWidth={2} />
+            </div>
+            {/* Scan line overlay */}
+            <div style={{ position: 'absolute', inset: 0, borderRadius: 8, background: 'linear-gradient(180deg, rgba(255,255,255,0.08) 0%, transparent 60%)', pointerEvents: 'none' }} />
           </div>
           <div>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16, color: "var(--text-1)", letterSpacing: "0.5px" }}>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 800, fontSize: 16, letterSpacing: '1.5px', color: '#f0fdf4', textTransform: 'uppercase' }}>
               AEGIS
             </div>
-            <div style={{ fontSize: 10, color: "var(--text-3)", letterSpacing: "0.5px", textTransform: 'uppercase' }}>Agentic Relief Coordinator</div>
+            <div style={{ fontSize: 9, color: '#4ade80', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: "'JetBrains Mono', monospace", opacity: 0.8 }}>Agentic Relief Coordinator</div>
           </div>
         </div>
 
