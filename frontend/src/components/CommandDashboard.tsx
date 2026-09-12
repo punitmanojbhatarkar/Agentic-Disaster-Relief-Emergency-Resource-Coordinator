@@ -728,7 +728,7 @@ export default function CommandDashboard({ apiBase, clickedCoords, user, showAna
 
       {/* ── FULL SCREEN ANALYTICS OVERLAY ── */}
       {showAnalytics && (
-        <div style={{ 
+        <div className="analytics-print-area" style={{ 
           position: 'fixed', top: 60, left: 10, right: 10, bottom: 40,
           background: 'var(--bg-panel)',
           borderRadius: 16,
@@ -751,9 +751,14 @@ export default function CommandDashboard({ apiBase, clickedCoords, user, showAna
                 <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Real-time coordination and resource metrics</div>
               </div>
             </div>
-            <button onClick={() => setShowAnalytics(false)} style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'var(--text-1)', width: 32, height: 32, borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              ✕
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <button className="no-print" onClick={() => window.print()} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer', background: 'rgba(56,189,248,0.1)', color: '#38bdf8', border: '1px solid rgba(56,189,248,0.3)', fontWeight: 600 }}>
+                Download PDF Report
+              </button>
+              <button className="no-print" onClick={() => setShowAnalytics(false)} style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'var(--text-1)', width: 32, height: 32, borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                ✕
+              </button>
+            </div>
           </div>
           
           <div style={{ flex: 1, padding: '16px 24px', overflowY: 'auto' }}>

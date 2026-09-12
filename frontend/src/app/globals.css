@@ -400,3 +400,30 @@ html, body { height: 100%; overflow: hidden; background: var(--bg-deep); color: 
   background: rgba(0,0,0,0.2);
   border-radius: 6px;
 }
+
+/* ── Print Styles for PDF Export ── */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .analytics-print-area, .analytics-print-area * {
+    visibility: visible;
+  }
+  .analytics-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: auto;
+    margin: 0;
+    padding: 20px;
+    box-shadow: none !important;
+    border: none !important;
+    background: var(--bg-deep) !important; /* Retain dark background for dark charts */
+    color: var(--text-1) !important;
+    overflow: visible !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
