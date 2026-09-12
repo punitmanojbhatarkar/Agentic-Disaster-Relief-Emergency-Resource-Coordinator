@@ -713,40 +713,19 @@ export default function CommandDashboard({ apiBase, clickedCoords, user, showAna
                       border: `1px solid ${s.color}40`, borderRadius: 8,
                       textAlign: 'left', lineHeight: 1.3
                     }}
-
-          {/* FEATURE 4: What-If Simulation Panel */}
-          <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', flexShrink: 0, background: 'rgba(239,68,68,0.04)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              <span style={{ fontSize: 16 }}>⚡</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.5px' }}>What-If Predictive Simulation</span>
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
-              Inject a hypothetical mega-disaster. AI Agents instantly re-route all resources to show response capacity.
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-              {[
-                { scenario: 'cyclone', label: '🌀 Cyclone Odisha', color: '#3b82f6' },
-                { scenario: 'earthquake', label: '🏔️ Earthquake Uttarakhand', color: '#f97316' },
-                { scenario: 'flood', label: '🌊 Brahmaputra Dam Break', color: '#38bdf8' },
-                { scenario: 'heatwave', label: '🔥 Heatwave Rajasthan', color: '#ef4444' },
-              ].map(s => (
-                <button
-                  key={s.scenario}
-                  onClick={() => handleWhatIf(s.scenario)}
-                  style={{
-                    padding: '8px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                    background: `${s.color}15`, color: s.color,
-                    border: `1px solid ${s.color}40`, borderRadius: 8,
-                    textAlign: 'left', lineHeight: 1.3
-                  }}
-                >
-                  {s.label}
-                </button>
-              ))}
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              {/* Analytics was here, moved to overlay */}
             </div>
           </div>
-        </div>
-      
+        )}
+      </div>
+
       {/* ── FULL SCREEN ANALYTICS OVERLAY ── */}
       {showAnalytics && (
         <div style={{ 
@@ -998,6 +977,7 @@ export default function CommandDashboard({ apiBase, clickedCoords, user, showAna
       )}
       
       <AgentStatusBar />
+    </div>
     </>
   );
 }
