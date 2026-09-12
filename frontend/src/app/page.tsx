@@ -34,6 +34,7 @@ export default function HomePage() {
   // Feature 3: SMS Simulation State
   const [smsMessage, setSmsMessage] = useState("");
   const [smsPhone, setSmsPhone] = useState("+919876543210");
+  const [showAnalytics, setShowAnalytics] = useState(false);
   const [smsResult, setSmsResult] = useState<any>(null);
   const [smsLoading, setSmsLoading] = useState(false);
 
@@ -207,6 +208,16 @@ export default function HomePage() {
             </button>
           )}
 
+          {/* Analytics (Logged in users only) */}
+          {user && (
+            <button 
+              onClick={() => setShowAnalytics(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', fontSize: 12, borderRadius: 6, cursor: 'pointer', background: 'rgba(39,103,73,0.1)', color: '#4ade80', border: '1px solid rgba(39,103,73,0.3)', flexShrink: 0 }}
+            >
+              <BarChart3 size={14} /> Analytics
+            </button>
+          )}
+
           {!user ? (
             <button 
               onClick={() => { setIsNewUser(false); setShowLoginModal(true); }}
@@ -261,7 +272,7 @@ export default function HomePage() {
       {/* ── MAIN LAYOUT ── */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         <MapPanel apiBase={apiBase} onMapClick={setClickedCoords} isAdmin={user?.role === 'admin'} />
-        <CommandDashboard apiBase={apiBase} clickedCoords={clickedCoords} user={user} />
+        <CommandDashboard apiBase={apiBase} clickedCoords={clickedCoords} user={user} showAnalytics={showAnalytics} setShowAnalytics={setShowAnalytics} />
       </div>
 
       {/* ─────────────────────────────────── */}

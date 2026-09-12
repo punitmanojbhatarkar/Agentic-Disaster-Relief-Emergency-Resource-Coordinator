@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle, BarChart3, Map, ClipboardList, Mic, Crossha
 import AgentStatusBar from './AgentStatusBar';
 import AnalyticsPanel from './AnalyticsPanel';
 
-export default function CommandDashboard({ apiBase, clickedCoords, user }: { apiBase: string, clickedCoords?: {lat: number, lon: number} | null, user?: {username: string, role: string} | null }) {
+export default function CommandDashboard({ apiBase, clickedCoords, user, showAnalytics, setShowAnalytics }: { apiBase: string, clickedCoords?: {lat: number, lon: number} | null, user?: {username: string, role: string} | null, showAnalytics: boolean, setShowAnalytics: (v: boolean) => void }) {
   const [zones, setZones] = useState<any>({});
   const [pendingZones, setPendingZones] = useState<any>({});
   const [inventory, setInventory] = useState<any>({});
@@ -13,10 +13,11 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
   const [expandedZone, setExpandedZone] = useState<string | null>(null);
   const [zoneFacilities, setZoneFacilities] = useState<Record<string, any[]>>({});
   const [fetchingFacilities, setFetchingFacilities] = useState<Record<string, boolean>>({});
-  const [activeTab, setActiveTab] = useState<'zones' | 'pending' | 'analytics'>('zones');
+  const [activeTab, setActiveTab] = useState<'zones' | 'pending'>('zones');
 
+  // Ensure active tab stays valid when user logs out
   useEffect(() => {
-    if (!user && activeTab === 'analytics') {
+    if (!user && activeTab === 'pending') {
       setActiveTab('zones');
     }
   }, [user, activeTab]);
@@ -302,28 +303,24 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
   };
 
 
-  // When analytics is active, take over the left 62% of the screen as a true split
-  const isAnalytics = activeTab === 'analytics';
-
   return (
-    <div style={{ position: 'absolute', top: 60, left: 10, right: 10, bottom: 40, display: 'flex', gap: 10, pointerEvents: 'none', zIndex: 1000 }}>
-      
-      {/* LEFT COLUMN: ZONES OR ANALYTICS */}
-      <div style={{
-        width: isAnalytics ? 'calc(62vw - 20px)' : 320,
-        maxWidth: isAnalytics ? '900px' : '320px',
-        background: 'var(--bg-panel)',
-        borderRadius: 16,
-        padding: isAnalytics ? '16px 20px' : 15,
-        pointerEvents: 'auto',
-        overflowY: 'auto',
-        backdropFilter: 'blur(12px)',
-        border: '1px solid var(--border)',
-        display: 'flex',
-        flexDirection: 'column',
-        transition: 'width 0.35s cubic-bezier(0.4,0,0.2,1), max-width 0.35s cubic-bezier(0.4,0,0.2,1)',
-        boxShadow: isAnalytics ? '4px 0 40px rgba(0,0,0,0.5)' : 'none',
-      }}>
+    <>
+      <div style={{ position: 'absolute', top: 60, left: 10, right: 10, bottom: 40, display: 'flex', gap: 10, pointerEvents: 'none', zIndex: 1000 }}>
+        
+        {/* LEFT COLUMN: ZONES */}
+        <div style={{
+          width: 320,
+          background: 'var(--bg-panel)',
+          borderRadius: 16,
+          padding: 15,
+          pointerEvents: 'auto',
+          overflowY: 'auto',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid var(--border)',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '4px 0 20px rgba(0,0,0,0.3)',
+        }}>
         
         {/* Tab Switcher */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 12 }}>
@@ -340,15 +337,6 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
               style={{ flex: 1, padding: '8px', background: activeTab === 'pending' ? 'var(--accent)' : 'transparent', color: activeTab === 'pending' ? '#fff' : 'var(--text-3)', border: '1px solid', borderColor: activeTab === 'pending' ? 'var(--accent)' : 'var(--border)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
             >
               <ClipboardList size={14} /> Pending
-            </button>
-          )}
-          
-          {user && (
-            <button 
-              onClick={() => setActiveTab('analytics')}
-              style={{ flex: 1, padding: '8px', background: activeTab === 'analytics' ? 'var(--accent)' : 'transparent', color: activeTab === 'analytics' ? '#fff' : 'var(--text-3)', border: '1px solid', borderColor: activeTab === 'analytics' ? 'var(--accent)' : 'var(--border)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
-            >
-              <BarChart3 size={14} /> Analytics
             </button>
           )}
         </div>
@@ -725,18 +713,75 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
                       border: `1px solid ${s.color}40`, borderRadius: 8,
                       textAlign: 'left', lineHeight: 1.3
                     }}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
+
+          {/* FEATURE 4: What-If Simulation Panel */}
+          <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', flexShrink: 0, background: 'rgba(239,68,68,0.04)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <span style={{ fontSize: 16 }}>⚡</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.5px' }}>What-If Predictive Simulation</span>
             </div>
-            <div style={{ flex: 1, overflow: 'auto' }}>
-              <AnalyticsPanel zones={zones} inventory={inventory} assignments={assignments} />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
+              Inject a hypothetical mega-disaster. AI Agents instantly re-route all resources to show response capacity.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              {[
+                { scenario: 'cyclone', label: '🌀 Cyclone Odisha', color: '#3b82f6' },
+                { scenario: 'earthquake', label: '🏔️ Earthquake Uttarakhand', color: '#f97316' },
+                { scenario: 'flood', label: '🌊 Brahmaputra Dam Break', color: '#38bdf8' },
+                { scenario: 'heatwave', label: '🔥 Heatwave Rajasthan', color: '#ef4444' },
+              ].map(s => (
+                <button
+                  key={s.scenario}
+                  onClick={() => handleWhatIf(s.scenario)}
+                  style={{
+                    padding: '8px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                    background: `${s.color}15`, color: s.color,
+                    border: `1px solid ${s.color}40`, borderRadius: 8,
+                    textAlign: 'left', lineHeight: 1.3
+                  }}
+                >
+                  {s.label}
+                </button>
+              ))}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      
+      {/* ── FULL SCREEN ANALYTICS OVERLAY ── */}
+      {showAnalytics && (
+        <div style={{ 
+          position: 'fixed', top: 60, left: 10, right: 10, bottom: 40,
+          background: 'var(--bg-panel)',
+          borderRadius: 16,
+          border: '1px solid var(--border)',
+          backdropFilter: 'blur(16px)',
+          pointerEvents: 'auto',
+          zIndex: 2000,
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)'
+        }}>
+          {/* Analytics Header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(39,103,73,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <BarChart3 size={18} color="#4ade80" />
+              </div>
+              <div>
+                <h2 style={{ fontSize: 18, fontWeight: 800, color: '#f0fdf4', letterSpacing: '0.5px' }}>SYSTEM ANALYTICS</h2>
+                <div style={{ fontSize: 11, color: 'var(--text-3)' }}>Real-time coordination and resource metrics</div>
+              </div>
+            </div>
+            <button onClick={() => setShowAnalytics(false)} style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'var(--text-1)', width: 32, height: 32, borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              ✕
+            </button>
+          </div>
+          
+          <div style={{ flex: 1, padding: '16px 24px', overflowY: 'auto' }}>
+            <AnalyticsPanel zones={zones} inventory={inventory} assignments={assignments} />
+          </div>
+        </div>
+      )}
 
       {/* REPORTING MODAL */}
       {isReporting && (
@@ -953,6 +998,6 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
       )}
       
       <AgentStatusBar />
-    </div>
+    </>
   );
 }
