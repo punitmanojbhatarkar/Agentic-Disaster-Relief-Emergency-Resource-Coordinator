@@ -597,7 +597,7 @@ Return ONLY valid JSON, no markdown.
 """
         
         grounded_response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.6-flash",
             contents=search_prompt,
             config=genai_types.GenerateContentConfig(
                 tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
@@ -646,7 +646,7 @@ Return a JSON object with:
 Return ONLY valid JSON, no markdown.
 """
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.6-flash",
             contents=fallback_prompt,
             config=genai_types.GenerateContentConfig(temperature=0.3)
         )
@@ -1450,7 +1450,7 @@ Rules:
 - Return ONLY the JSON, no markdown, no explanation
 """
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
         body = {"contents": [{"parts": [{"text": prompt}]}]}
         r = req.post(url, json=body, timeout=15)
         r.raise_for_status()
