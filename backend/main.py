@@ -1448,6 +1448,8 @@ SMS: "{sms_text}"
 Return JSON with these fields:
 {{
   "location": "city/district name (string)",
+  "lat": approximate latitude (float, highly accurate to the city/location),
+  "lon": approximate longitude (float, highly accurate to the city/location),
   "severity_reported": 1-10 integer,
   "description": "brief English description of the emergency",
   "population": estimated affected population as integer,
@@ -1541,6 +1543,22 @@ def sms_webhook(payload: SmsWebhookPayload):
             "description": f"SMS report from {from_number} → {parsed.get('location')}: {parsed.get('description', '')[:80]}"
         })
         trigger_broadcast()
+
+        # ── Background Facility Lookup ──
+        final_lat = parsed.get("lat")
+        final_lon = parsed.get("lon")
+        if final_lat and final_lon:
+            def _fetch_and_attach_facilities(zid, lat, lon):
+                try:
+                    facilities = find_nearest_facilities(lat, lon, radius_km=100)
+                    if zid in state.pending_zones:
+                        state.pending_zones[zid]["nearest_facilities"] = facilities
+                        state.save()
+                        trigger_broadcast()
+                except Exception as e:
+                    print(f"FacilityFinder SMS Failed: {e}")
+            t = threading.Thread(target=_fetch_and_attach_facilities, args=(zone_id, final_lat, final_lon), daemon=True)
+            t.start()
 
         # Acknowledge via Twilio
         _send_twilio_sms(from_number,
