@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { Shield, Sun, Moon, Globe2, LogIn, FileSearch, LogOut, MessageSquare, Zap, Languages } from "lucide-react";
+import { Shield, Sun, Moon, Globe2, LogIn, FileSearch, LogOut, MessageSquare, Zap, Languages, BarChart3 } from "lucide-react";
 import CommandDashboard from "@/components/CommandDashboard";
 
 const MapPanel = dynamic(() => import("@/components/MapPanel"), { ssr: false });
