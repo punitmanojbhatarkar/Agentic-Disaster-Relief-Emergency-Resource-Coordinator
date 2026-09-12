@@ -301,11 +301,29 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
     }
   };
 
+
+  // When analytics is active, take over the left 62% of the screen as a true split
+  const isAnalytics = activeTab === 'analytics';
+
   return (
     <div style={{ position: 'absolute', top: 60, left: 10, right: 10, bottom: 40, display: 'flex', gap: 10, pointerEvents: 'none', zIndex: 1000 }}>
       
       {/* LEFT COLUMN: ZONES OR ANALYTICS */}
-      <div style={{ width: activeTab === 'analytics' ? 800 : 320, background: 'var(--bg-panel)', borderRadius: 16, padding: 15, pointerEvents: 'auto', overflowY: 'auto', backdropFilter: 'blur(10px)', border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', transition: 'width 0.3s ease' }}>
+      <div style={{
+        width: isAnalytics ? 'calc(62vw - 20px)' : 320,
+        maxWidth: isAnalytics ? '900px' : '320px',
+        background: 'var(--bg-panel)',
+        borderRadius: 16,
+        padding: isAnalytics ? '16px 20px' : 15,
+        pointerEvents: 'auto',
+        overflowY: 'auto',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid var(--border)',
+        display: 'flex',
+        flexDirection: 'column',
+        transition: 'width 0.35s cubic-bezier(0.4,0,0.2,1), max-width 0.35s cubic-bezier(0.4,0,0.2,1)',
+        boxShadow: isAnalytics ? '4px 0 40px rgba(0,0,0,0.5)' : 'none',
+      }}>
         
         {/* Tab Switcher */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '1px solid var(--border)', paddingBottom: 12 }}>
