@@ -190,6 +190,24 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
     if (logRes.ok) setAuditLog(await logRes.json());
   };
 
+  const handleWhatIf = async (scenario: string) => {
+    await fetch(`${apiBase}/api/simulate/what-if`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario })
+    });
+    const [zRes, iRes, aRes, logRes] = await Promise.all([
+      fetch(`${apiBase}/api/zones`),
+      fetch(`${apiBase}/api/resources`),
+      fetch(`${apiBase}/api/assignments`),
+      fetch(`${apiBase}/api/audit-log`),
+    ]);
+    if (zRes.ok) setZones(await zRes.json());
+    if (iRes.ok) setInventory(await iRes.json());
+    if (aRes.ok) setAssignments(await aRes.json());
+    if (logRes.ok) setAuditLog(await logRes.json());
+  };
+
   const getSevColor = (sev: number) => {
     if (sev >= 9) return 'var(--sev-9)';
     if (sev >= 7) return 'var(--sev-7)';
@@ -617,7 +635,42 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
             </div>
           </div>
         ) : (
-          <AnalyticsPanel zones={zones} inventory={inventory} assignments={assignments} />
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', gap: 0 }}>
+            {/* FEATURE 4: What-If Simulation Panel */}
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0, background: 'rgba(239,68,68,0.04)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <span style={{ fontSize: 16 }}>⚡</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.5px' }}>What-If Predictive Simulation</span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
+                Inject a hypothetical mega-disaster. AI Agents instantly re-route all resources to show response capacity.
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                {[
+                  { scenario: 'cyclone', label: '🌀 Cyclone Odisha', color: '#3b82f6' },
+                  { scenario: 'earthquake', label: '🏔️ Earthquake Uttarakhand', color: '#f97316' },
+                  { scenario: 'flood', label: '🌊 Brahmaputra Dam Break', color: '#38bdf8' },
+                  { scenario: 'heatwave', label: '🔥 Heatwave Rajasthan', color: '#ef4444' },
+                ].map(s => (
+                  <button
+                    key={s.scenario}
+                    onClick={() => handleWhatIf(s.scenario)}
+                    style={{
+                      padding: '8px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                      background: `${s.color}15`, color: s.color,
+                      border: `1px solid ${s.color}40`, borderRadius: 8,
+                      textAlign: 'left', lineHeight: 1.3
+                    }}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              <AnalyticsPanel zones={zones} inventory={inventory} assignments={assignments} />
+            </div>
+          </div>
         )}
       </div>
 
@@ -637,7 +690,10 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
             boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)'
           }}>
             <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, color: 'var(--text-1)', letterSpacing: '-0.3px' }}>Report Incident</h2>
-            <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 24, lineHeight: 1.4 }}>Click anywhere on the map to auto-fill coordinates. AI will intelligently estimate missing data.</p>
+            <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8, lineHeight: 1.4 }}>Click anywhere on the map to auto-fill coordinates. AI will intelligently estimate missing data.</p>
+            <div style={{ fontSize: 11, padding: '6px 10px', marginBottom: 16, background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 6, color: '#38bdf8', lineHeight: 1.5 }}>
+              🌐 <b>Multilingual:</b> You can type in <b>Hindi, Marathi, Assamese, Bengali, Tamil, Telugu</b> or any Indian language. Our AI will auto-translate and extract the emergency details.
+            </div>
             
             <form onSubmit={handleSubmitReport} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>

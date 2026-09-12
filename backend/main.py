@@ -1338,3 +1338,290 @@ def approve_access(approval: AccessApproval):
         
     state.save()
     return {"status": status_msg}
+
+# ==========================================
+# FEATURE 2: Citizen ETA Tracking
+# ==========================================
+
+@app.get("/api/citizen/status")
+def citizen_status(phone: str):
+    """
+    Citizen-facing: look up the status of their incident report by phone number.
+    Returns the zone status + ETA of dispatched resources.
+    """
+    phone_clean = phone.strip().replace(" ", "")
+    matched_zone = None
+
+    for zone in list(state.zones.values()) + list(state.pending_zones.values()):
+        reporter_phone = zone.get("reporter_contact", "")
+        if reporter_phone and reporter_phone.replace(" ", "").endswith(phone_clean[-9:]):
+            matched_zone = zone
+            break
+
+    if not matched_zone:
+        return {
+            "found": False,
+            "message": "No incident found for this phone number. Please ensure you reported using this number."
+        }
+
+    zone_id = matched_zone.get("zone_id")
+    is_pending = zone_id in state.pending_zones
+    severity = matched_zone.get("severity_final", matched_zone.get("severity_reported", 5))
+    location = matched_zone.get("location", "Unknown Location")
+
+    # Find dispatched assignments for this zone
+    assignments = [a for a in state.assignments if a.get("zone_id") == zone_id]
+    facilities = matched_zone.get("nearest_facilities", [])
+
+    # Estimate ETA
+    eta_text = None
+    eta_minutes = None
+    if facilities:
+        nearest = min(facilities, key=lambda f: f.get("eta_minutes", 9999))
+        eta_minutes = nearest.get("eta_minutes", None)
+        if eta_minutes:
+            if eta_minutes < 60:
+                eta_text = f"{eta_minutes} minutes"
+            else:
+                eta_text = f"{eta_minutes // 60}h {eta_minutes % 60}m"
+
+    if is_pending:
+        status_code = "PENDING_REVIEW"
+        status_msg = "Your report has been received and is under review by the Command Center."
+    elif assignments:
+        status_code = "DISPATCHED"
+        resource_list = ", ".join(set(a.get("resource_type", "resources") for a in assignments))
+        status_msg = f"✅ Help has been dispatched! Resources: {resource_list}"
+    else:
+        status_code = "PROCESSING"
+        status_msg = "Your incident has been verified and resources are being coordinated."
+
+    return {
+        "found": True,
+        "zone_id": zone_id,
+        "location": location,
+        "severity": severity,
+        "status_code": status_code,
+        "status_message": status_msg,
+        "eta_text": eta_text,
+        "eta_minutes": eta_minutes,
+        "assignments_count": len(assignments),
+        "reporter_name": matched_zone.get("reporter_name", "Unknown"),
+    }
+
+
+# ==========================================
+# FEATURE 3: SMS Webhook (Twilio-ready)
+# ==========================================
+
+def _parse_sms_with_gemini(sms_text: str) -> dict:
+    """Use Gemini to extract structured disaster info from a raw SMS."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {}
+    import requests as req
+    prompt = f"""
+You are an emergency disaster coordinator receiving an SMS from a citizen in India.
+Extract the following information from this SMS message and return ONLY valid JSON.
+
+SMS: "{sms_text}"
+
+Return JSON with these fields:
+{{
+  "location": "city/district name (string)",
+  "severity_reported": 1-10 integer,
+  "description": "brief English description of the emergency",
+  "population": estimated affected population as integer,
+  "reporter_name": "name if mentioned else Unknown",
+  "reporter_contact": "phone number if mentioned else Unknown",
+  "needs": {{}} 
+}}
+
+Rules:
+- If SMS is in Hindi/Bengali/Assamese/Tamil/any Indian language, translate to English for description
+- Estimate severity: minor=3, moderate=5, serious=7, life-threatening=9
+- Estimate population from context (village=5000, town=50000, city=200000)
+- Return ONLY the JSON, no markdown, no explanation
+"""
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        body = {"contents": [{"parts": [{"text": prompt}]}]}
+        r = req.post(url, json=body, timeout=15)
+        r.raise_for_status()
+        text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        # Clean JSON fences
+        text = text.strip().strip("```json").strip("```").strip()
+        return json.loads(text)
+    except Exception as e:
+        print(f"[SMS Parser] Gemini parse failed: {e}")
+        return {}
+
+
+def _send_twilio_sms(to_number: str, message: str):
+    """Send an SMS via Twilio. Silently fails if credentials not set."""
+    try:
+        from twilio.rest import Client
+        sid = os.environ.get("TWILIO_ACCOUNT_SID")
+        token = os.environ.get("TWILIO_AUTH_TOKEN")
+        from_number = os.environ.get("TWILIO_PHONE_NUMBER", "+1234567890")
+        if not sid or not token:
+            print("[Twilio] Missing credentials, skipping SMS")
+            return
+        client = Client(sid, token)
+        client.messages.create(body=message, from_=from_number, to=to_number)
+        print(f"[Twilio] SMS sent to {to_number}")
+    except Exception as e:
+        print(f"[Twilio] Failed to send SMS: {e}")
+
+
+class SmsWebhookPayload(BaseModel):
+    From: str = "+919999999999"  # Twilio passes 'From'
+    Body: str                    # The SMS text content
+
+
+@app.post("/api/sms/webhook")
+def sms_webhook(payload: SmsWebhookPayload):
+    """
+    Receives an incoming SMS (from Twilio webhook or demo simulation).
+    Parses the message using Gemini (multilingual), creates a pending zone,
+    and sends a confirmation SMS back to the reporter via Twilio.
+    """
+    sms_text = payload.Body
+    from_number = payload.From
+
+    print(f"[SMS Webhook] Received from {from_number}: {sms_text}")
+
+    # Parse the SMS using Gemini (handles all Indian languages)
+    parsed = _parse_sms_with_gemini(sms_text)
+    if not parsed or not parsed.get("location"):
+        _send_twilio_sms(from_number, 
+            "❌ We could not understand your message. Please send: LOCATION, DESCRIPTION. Example: Jorhat Assam, severe flooding, 10000 people affected")
+        return {"status": "parse_failed", "raw": sms_text}
+
+    # Fill in reporter contact from the SMS sender
+    parsed["reporter_contact"] = from_number
+    parsed["zone_id"] = f"SMS-{str(uuid.uuid4())[:6].upper()}"
+    parsed["source"] = "sms"
+    parsed.setdefault("needs", {})
+
+    # Send through the same pipeline as web reports
+    import requests as internal_req
+    # Inject directly into state (same as report_zone logic)
+    zone_id = parsed["zone_id"]
+    try:
+        zr = ZoneReport(**parsed)
+        zr = score_zone(zr)
+        state.pending_zones[zone_id] = zr.model_dump()
+        state.save()
+
+        state.audit_log.insert(0, {
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent": "SMS-Gateway",
+            "event_type": "SMS_INCIDENT_REPORT",
+            "zone_id": zone_id,
+            "description": f"SMS report from {from_number} → {parsed.get('location')}: {parsed.get('description', '')[:80]}"
+        })
+        trigger_broadcast()
+
+        # Acknowledge via Twilio
+        _send_twilio_sms(from_number,
+            f"✅ Namaskar! Your emergency report for {parsed.get('location')} has been received. "
+            f"Zone ID: {zone_id}. Track status at: kurushetra.vercel.app\n"
+            f"You will receive updates when help is dispatched. NDRF/Disaster Relief teams are being alerted. 🙏"
+        )
+
+        return {"status": "success", "zone_id": zone_id, "parsed": parsed}
+
+    except Exception as e:
+        print(f"[SMS Webhook] Error creating zone: {e}")
+        _send_twilio_sms(from_number, 
+            "❌ Error processing your report. Please call 112 for emergency assistance.")
+        return {"status": "error", "detail": str(e)}
+
+
+class SimulateSmsRequest(BaseModel):
+    message: str
+    phone: str = "+919876543210"
+
+
+@app.post("/api/sms/simulate")
+def simulate_sms(req: SimulateSmsRequest):
+    """Demo endpoint: simulate an incoming SMS for the live presentation."""
+    return sms_webhook(SmsWebhookPayload(From=req.phone, Body=req.message))
+
+
+# ==========================================
+# FEATURE 4: What-If Simulation (already /api/simulate/inject-urgent)
+# Just add a named cyclone/earthquake scenario
+# ==========================================
+
+class WhatIfScenario(BaseModel):
+    scenario: str = "cyclone"  # cyclone | earthquake | flood | heatwave
+
+@app.post("/api/simulate/what-if")
+def what_if_simulation(req: WhatIfScenario):
+    """Inject a large-scale hypothetical disaster to demo predictive simulation."""
+    scenarios = {
+        "cyclone": {
+            "zone_id": "CYCLONE-ODISHA",
+            "location": "Puri, Odisha (Cyclone Landfall)",
+            "severity_reported": 9.5,
+            "population": 1200000,
+            "gee_area_km2": 4500,
+            "needs": {"ndrf_teams": 15, "food_kg": 500000, "water_liters": 2000000, "medical_kits": 5000, "shelter_units": 20000},
+            "description": "Category 5 Cyclone making landfall. Storm surge 6m. 12 lakh population at risk. Coastal evacuation required.",
+            "lat": 19.81, "lon": 85.82
+        },
+        "earthquake": {
+            "zone_id": "EQ-UTTARKASHI",
+            "location": "Uttarkashi, Uttarakhand (Earthquake 7.2M)",
+            "severity_reported": 9.8,
+            "population": 350000,
+            "gee_area_km2": 2200,
+            "needs": {"ndrf_teams": 20, "medical_kits": 8000, "food_kg": 200000, "water_liters": 500000, "shelter_units": 15000},
+            "description": "7.2 magnitude earthquake. Multiple villages buried under landslides. Road access cut off. Air rescue required.",
+            "lat": 30.73, "lon": 78.44
+        },
+        "flood": {
+            "zone_id": "FLOOD-BRAHMAPUTRA",
+            "location": "Brahmaputra Basin, Assam (Dam Breach)",
+            "severity_reported": 9.0,
+            "population": 2500000,
+            "gee_area_km2": 8000,
+            "needs": {"ndrf_teams": 25, "food_kg": 1000000, "water_liters": 5000000, "medical_kits": 10000, "shelter_units": 50000},
+            "description": "Catastrophic dam breach. 8000 sq km inundated. 25 lakh people displaced. Rescue boats needed urgently.",
+            "lat": 26.32, "lon": 91.74
+        },
+        "heatwave": {
+            "zone_id": "HEATWAVE-RAJASTHAN",
+            "location": "Barmer, Rajasthan (Extreme Heatwave)",
+            "severity_reported": 8.5,
+            "population": 800000,
+            "gee_area_km2": 6000,
+            "needs": {"medical_kits": 20000, "water_liters": 8000000, "food_kg": 100000, "ndrf_teams": 5},
+            "description": "52°C recorded. Mass casualty heatwave event. 800K people at risk. Hydration centers needed immediately.",
+            "lat": 25.74, "lon": 71.39
+        }
+    }
+
+    z_data = scenarios.get(req.scenario, scenarios["cyclone"])
+    z_data["original_needs"] = dict(z_data["needs"])
+
+    try:
+        zr = ZoneReport(**z_data)
+        zr = score_zone(zr)
+        state.zones[zr.zone_id] = zr.model_dump()
+        state.save()
+        trigger_reallocation(reason=f"WHAT-IF SIMULATION: {req.scenario.upper()} injected", triggering_zone_id=zr.zone_id)
+        state.audit_log.insert(0, {
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent": "WhatIfSimulator",
+            "event_type": "WHAT_IF_SCENARIO",
+            "zone_id": zr.zone_id,
+            "description": f"⚡ WHAT-IF: {req.scenario.upper()} scenario injected at {z_data['location']}. Severity {z_data['severity_reported']}/10"
+        })
+        trigger_broadcast()
+        return {"status": "success", "scenario": req.scenario, "zone_id": zr.zone_id}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
