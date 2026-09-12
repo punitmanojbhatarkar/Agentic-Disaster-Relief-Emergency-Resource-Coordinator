@@ -613,7 +613,7 @@ export default function MapPanel({ apiBase, onMapClick, isAdmin }: MapPanelProps
       <div style={{
         position: "absolute",
         bottom: 24,
-        right: 24,
+        right: isAdmin ? 360 : 24,
         display: "flex",
         flexDirection: "column",
         gap: 8,
