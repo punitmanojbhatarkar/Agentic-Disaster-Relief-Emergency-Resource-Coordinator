@@ -1284,13 +1284,18 @@ def resolve_zone(zone_id: str):
 @app.post("/api/login")
 def login(user: UserLogin):
     from backend.store.state import state
-    if user.username in state.users:
-        if state.users[user.username]["password"] == user.password:
+    clean_username = user.username.strip().lower()
+    
+    # Create a lowercased map of users to prevent case-sensitivity issues
+    users_lower = {k.lower(): v for k, v in state.users.items()}
+    
+    if clean_username in users_lower:
+        if users_lower[clean_username]["password"] == user.password.strip():
             return {
                 "success": True, 
                 "user": {
-                    "username": user.username, 
-                    "role": state.users[user.username]["role"]
+                    "username": clean_username, 
+                    "role": users_lower[clean_username]["role"]
                 }
             }
         else:
