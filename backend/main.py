@@ -1224,6 +1224,36 @@ def simulate_inject_urgent():
     trigger_reallocation(reason="Urgent Zone F injected", triggering_zone_id="Zone F")
     return {"status": "Urgent zone injected"}
 
+class ApproveRequest(BaseModel):
+    needs: Optional[dict] = None
+
+@app.post("/api/zones/{zone_id}/approve")
+def approve_zone(zone_id: str, req: ApproveRequest):
+    if zone_id not in state.pending_zones:
+        return {"error": "Pending zone not found"}
+        
+    zone = state.pending_zones.pop(zone_id)
+    if req.needs:
+        zone["needs"] = req.needs
+    zone["original_needs"] = dict(zone.get("needs", {}))
+    
+    state.zones[zone_id] = zone
+    state.save()
+    
+    run_allocation()
+    trigger_broadcast()
+    return {"status": "approved"}
+
+@app.post("/api/zones/{zone_id}/reject")
+def reject_zone(zone_id: str):
+    if zone_id not in state.pending_zones:
+        return {"error": "Pending zone not found"}
+        
+    state.pending_zones.pop(zone_id)
+    state.save()
+    trigger_broadcast()
+    return {"status": "rejected"}
+
 @app.post("/api/zones/{zone_id}/resolve")
 def resolve_zone(zone_id: str):
     if zone_id not in state.zones:
