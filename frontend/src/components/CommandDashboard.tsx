@@ -738,7 +738,7 @@ export default function CommandDashboard({ apiBase, clickedCoords, user }: { api
             <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, color: 'var(--text-1)', letterSpacing: '-0.3px' }}>Report Incident</h2>
             <p style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 8, lineHeight: 1.4 }}>Click anywhere on the map to auto-fill coordinates. AI will intelligently estimate missing data.</p>
             <div style={{ fontSize: 11, padding: '6px 10px', marginBottom: 16, background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 6, color: '#38bdf8', lineHeight: 1.5 }}>
-              🌐 <b>Multilingual:</b> You can type in <b>Hindi, Marathi, Assamese, Bengali, Tamil, Telugu</b> or any Indian language. Our AI will auto-translate and extract the emergency details.
+              🌐 <b>Multilingual:</b> You can type in <b>Hindi, Hinglish, Engdi, Marathi, Assamese, Bengali, Tamil, Telugu</b> or any Indian language. Our AI will auto-translate and extract the emergency details.
             </div>
             
             <form onSubmit={handleSubmitReport} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

@@ -7,7 +7,7 @@ import CommandDashboard from "@/components/CommandDashboard";
 const MapPanel = dynamic(() => import("@/components/MapPanel"), { ssr: false });
 
 // Feature 1: Language badge
-const SUPPORTED_LANGUAGES = ["EN", "हि", "বাং", "অসমীয়া", "मराठी", "தமிழ்", "తెలుగు", "ਪੰਜਾਬੀ"];
+const SUPPORTED_LANGUAGES = ["EN", "हि", "Hinglish", "Engdi", "বাং", "অসমীয়া", "मराठी", "தமிழ்", "తెలుగు", "ਪੰਜਾਬੀ"];
 
 export default function HomePage() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
